@@ -191,6 +191,10 @@ func (m *Manager) Start(request StartRequest) (StartResult, error) {
 	if err := output.initialize(0, 0); err != nil {
 		return StartResult{}, err
 	}
+	if err := output.append(RuntimeOutputEvent{Stream: "event", Text: "QUEUED\n"}); err != nil {
+		return StartResult{}, err
+	}
+	record.OutputCursor, record.OutputBytes = output.cursorAndBytes()
 	job := &managedJob{record: record, arguments: args, output: output, workspaceKey: workspaceKey(record.Workspace)}
 	if err := m.persistence.save(record); err != nil {
 		return StartResult{}, err
