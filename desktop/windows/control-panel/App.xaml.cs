@@ -326,7 +326,7 @@ public partial class App : System.Windows.Application
         menu.Items.Add(CreateMenuItem("打开配置目录", (_, _) => Runtime.OpenConfigDirectory()));
         menu.Items.Add(CreateMenuItem("打开使用文档", (_, _) => OpenDocumentation()));
         menu.Items.Add(new Forms.ToolStripSeparator());
-        menu.Items.Add(CreateMenuItem("退出菜单栏", (_, _) => Dispatcher.Invoke(RequestExit)));
+        menu.Items.Add(CreateMenuItem("退出 AgentDock", async (_, _) => await StopAndExitAsync()));
 
         if (_notifyIcon is not null)
         {
@@ -452,6 +452,19 @@ public partial class App : System.Windows.Application
         catch (Exception ex)
         {
             _notifyIcon?.ShowBalloonTip(5000, "AgentDock", LastNonEmptyLine(ex.Message, "操作失败。"), Forms.ToolTipIcon.Error);
+        }
+    }
+
+    private async Task StopAndExitAsync()
+    {
+        try
+        {
+            await Runtime.RunActionAsync("stop");
+            Dispatcher.Invoke(RequestExit);
+        }
+        catch (Exception ex)
+        {
+            _notifyIcon?.ShowBalloonTip(5000, "AgentDock", LastNonEmptyLine(ex.Message, "退出失败。"), Forms.ToolTipIcon.Error);
         }
     }
 
