@@ -30,36 +30,46 @@ const (
 )
 
 type Config struct {
-	AgentDockHome                string
-	AgentDockDefaultDir          string
-	Host                         string
-	Port                         int
-	AuthToken                    string
-	OAuthEnabled                 bool
-	OAuthServerURL               string
-	OAuthAccessTokenTTLSeconds   int64
-	OAuthAccessTokenNeverExpires bool
-	LogLevel                     string
-	NexusEndpoint                string
-	NexusToken                   string
-	BrowserEnabled               bool
-	BrowserExecutablePath        string
-	BrowserCDPURL                string
-	BrowserReuseExistingCDP      bool
-	ACPEnabled                   bool
-	ACPAgentName                 string
-	ACPCommand                   string
-	ACPArgs                      []string
-	ACPEnvFromEnv                map[string]string
-	ACPMaxPrompts                int
-	ACPInteractionMS             int
-	OpenCodeEnabled              bool
-	OpenCodeRuntimeManifest      string
-	OpenCodeLogDir               string
-	Stdio                        bool
-	TrustedProxyCIDRs            []string
-	InstructionsFile             string
-	Instructions                 string
+	AgentDockHome                     string
+	AgentDockDefaultDir               string
+	Host                              string
+	Port                              int
+	AuthToken                         string
+	OAuthEnabled                      bool
+	OAuthServerURL                    string
+	OAuthAccessTokenTTLSeconds        int64
+	OAuthAccessTokenNeverExpires      bool
+	LogLevel                          string
+	NexusEndpoint                     string
+	NexusToken                        string
+	BrowserEnabled                    bool
+	BrowserExecutablePath             string
+	BrowserCDPURL                     string
+	BrowserReuseExistingCDP           bool
+	ACPEnabled                        bool
+	ACPAgentName                      string
+	ACPCommand                        string
+	ACPArgs                           []string
+	ACPEnvFromEnv                     map[string]string
+	ACPMaxPrompts                     int
+	ACPInteractionMS                  int
+	OpenCodeEnabled                   bool
+	OpenCodeRuntimeManifest           string
+	OpenCodeLogDir                    string
+	JobStorageRoot                    string
+	JobMaxConcurrent                  int
+	JobMaxConcurrentPerWorkspace      int
+	JobMaxConcurrentWritePerWorkspace int
+	JobMemoryOutputBytes              int
+	JobResponseOutputBytes            int
+	JobDiskSpoolBytes                 int
+	JobRetentionDays                  int
+	JobRetentionMaxCompleted          int
+	JobMaxTimeoutMS                   int
+	Stdio                             bool
+	TrustedProxyCIDRs                 []string
+	InstructionsFile                  string
+	Instructions                      string
 }
 
 func FromEnv() (Config, error) {
@@ -95,6 +105,42 @@ func FromEnv() (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
+	jobMaxConcurrent, err := getenvInt("AGENTDOCK_JOB_MAX_CONCURRENT", 0)
+	if err != nil {
+		return Config{}, err
+	}
+	jobMaxConcurrentPerWorkspace, err := getenvInt("AGENTDOCK_JOB_MAX_CONCURRENT_PER_WORKSPACE", 0)
+	if err != nil {
+		return Config{}, err
+	}
+	jobMaxConcurrentWritePerWorkspace, err := getenvInt("AGENTDOCK_JOB_MAX_CONCURRENT_WRITE_PER_WORKSPACE", 0)
+	if err != nil {
+		return Config{}, err
+	}
+	jobMemoryOutputBytes, err := getenvInt("AGENTDOCK_JOB_MEMORY_OUTPUT_BYTES", 0)
+	if err != nil {
+		return Config{}, err
+	}
+	jobResponseOutputBytes, err := getenvInt("AGENTDOCK_JOB_RESPONSE_OUTPUT_BYTES", 0)
+	if err != nil {
+		return Config{}, err
+	}
+	jobDiskSpoolBytes, err := getenvInt("AGENTDOCK_JOB_DISK_SPOOL_BYTES", 0)
+	if err != nil {
+		return Config{}, err
+	}
+	jobRetentionDays, err := getenvInt("AGENTDOCK_JOB_RETENTION_DAYS", 0)
+	if err != nil {
+		return Config{}, err
+	}
+	jobRetentionMaxCompleted, err := getenvInt("AGENTDOCK_JOB_RETENTION_MAX_COMPLETED", 0)
+	if err != nil {
+		return Config{}, err
+	}
+	jobMaxTimeoutMS, err := getenvInt("AGENTDOCK_JOB_MAX_TIMEOUT_MS", 0)
+	if err != nil {
+		return Config{}, err
+	}
 	var acpArgs []string
 	var acpEnvFromEnv map[string]string
 	acpAgentName := "claude"
@@ -122,35 +168,45 @@ func FromEnv() (Config, error) {
 		}
 	}
 	return Config{
-		AgentDockHome:                strings.TrimSpace(os.Getenv("AGENTDOCK_HOME")),
-		AgentDockDefaultDir:          strings.TrimSpace(os.Getenv("AGENTDOCK_DEFAULT_DIR")),
-		Host:                         getenv("AGENTDOCK_HOST", "127.0.0.1"),
-		Port:                         port,
-		AuthToken:                    os.Getenv("AGENTDOCK_AUTH_TOKEN"),
-		OAuthEnabled:                 oauthEnabled,
-		OAuthServerURL:               os.Getenv("AGENTDOCK_SERVER_URL"),
-		OAuthAccessTokenTTLSeconds:   oauthAccessTokenTTLSeconds,
-		OAuthAccessTokenNeverExpires: oauthAccessTokenNeverExpires,
-		LogLevel:                     getenv("AGENTDOCK_LOG_LEVEL", "info"),
-		NexusEndpoint:                getenv("AGENTDOCK_NEXUS_ENDPOINT", ""),
-		NexusToken:                   os.Getenv("AGENTDOCK_NEXUS_TOKEN"),
-		BrowserEnabled:               browserEnabled,
-		BrowserExecutablePath:        os.Getenv("AGENTDOCK_BROWSER_EXECUTABLE_PATH"),
-		BrowserCDPURL:                strings.TrimSpace(os.Getenv("AGENTDOCK_BROWSER_CDP_URL")),
-		BrowserReuseExistingCDP:      browserReuseExistingCDP,
-		ACPEnabled:                   acpEnabled,
-		ACPAgentName:                 acpAgentName,
-		ACPCommand:                   acpCommand,
-		ACPArgs:                      acpArgs,
-		ACPEnvFromEnv:                acpEnvFromEnv,
-		ACPMaxPrompts:                acpMaxPrompts,
-		ACPInteractionMS:             acpInteractionMS,
-		OpenCodeEnabled:              openCodeEnabled,
-		OpenCodeRuntimeManifest:      strings.TrimSpace(os.Getenv("AGENTDOCK_OPENCODE_RUNTIME_MANIFEST")),
-		OpenCodeLogDir:               strings.TrimSpace(os.Getenv("AGENTDOCK_OPENCODE_LOG_DIR")),
-		Stdio:                        stdio,
-		TrustedProxyCIDRs:            splitCommaSeparated(os.Getenv("AGENTDOCK_TRUSTED_PROXY_CIDRS")),
-		InstructionsFile:             strings.TrimSpace(os.Getenv("AGENTDOCK_INSTRUCTIONS_FILE")),
+		AgentDockHome:                     strings.TrimSpace(os.Getenv("AGENTDOCK_HOME")),
+		AgentDockDefaultDir:               strings.TrimSpace(os.Getenv("AGENTDOCK_DEFAULT_DIR")),
+		Host:                              getenv("AGENTDOCK_HOST", "127.0.0.1"),
+		Port:                              port,
+		AuthToken:                         os.Getenv("AGENTDOCK_AUTH_TOKEN"),
+		OAuthEnabled:                      oauthEnabled,
+		OAuthServerURL:                    os.Getenv("AGENTDOCK_SERVER_URL"),
+		OAuthAccessTokenTTLSeconds:        oauthAccessTokenTTLSeconds,
+		OAuthAccessTokenNeverExpires:      oauthAccessTokenNeverExpires,
+		LogLevel:                          getenv("AGENTDOCK_LOG_LEVEL", "info"),
+		NexusEndpoint:                     getenv("AGENTDOCK_NEXUS_ENDPOINT", ""),
+		NexusToken:                        os.Getenv("AGENTDOCK_NEXUS_TOKEN"),
+		BrowserEnabled:                    browserEnabled,
+		BrowserExecutablePath:             os.Getenv("AGENTDOCK_BROWSER_EXECUTABLE_PATH"),
+		BrowserCDPURL:                     strings.TrimSpace(os.Getenv("AGENTDOCK_BROWSER_CDP_URL")),
+		BrowserReuseExistingCDP:           browserReuseExistingCDP,
+		ACPEnabled:                        acpEnabled,
+		ACPAgentName:                      acpAgentName,
+		ACPCommand:                        acpCommand,
+		ACPArgs:                           acpArgs,
+		ACPEnvFromEnv:                     acpEnvFromEnv,
+		ACPMaxPrompts:                     acpMaxPrompts,
+		ACPInteractionMS:                  acpInteractionMS,
+		OpenCodeEnabled:                   openCodeEnabled,
+		OpenCodeRuntimeManifest:           strings.TrimSpace(os.Getenv("AGENTDOCK_OPENCODE_RUNTIME_MANIFEST")),
+		OpenCodeLogDir:                    strings.TrimSpace(os.Getenv("AGENTDOCK_OPENCODE_LOG_DIR")),
+		JobStorageRoot:                    strings.TrimSpace(os.Getenv("AGENTDOCK_JOB_STORAGE_ROOT")),
+		JobMaxConcurrent:                  jobMaxConcurrent,
+		JobMaxConcurrentPerWorkspace:      jobMaxConcurrentPerWorkspace,
+		JobMaxConcurrentWritePerWorkspace: jobMaxConcurrentWritePerWorkspace,
+		JobMemoryOutputBytes:              jobMemoryOutputBytes,
+		JobResponseOutputBytes:            jobResponseOutputBytes,
+		JobDiskSpoolBytes:                 jobDiskSpoolBytes,
+		JobRetentionDays:                  jobRetentionDays,
+		JobRetentionMaxCompleted:          jobRetentionMaxCompleted,
+		JobMaxTimeoutMS:                   jobMaxTimeoutMS,
+		Stdio:                             stdio,
+		TrustedProxyCIDRs:                 splitCommaSeparated(os.Getenv("AGENTDOCK_TRUSTED_PROXY_CIDRS")),
+		InstructionsFile:                  strings.TrimSpace(os.Getenv("AGENTDOCK_INSTRUCTIONS_FILE")),
 	}, nil
 }
 
@@ -212,6 +268,39 @@ func (c *Config) Normalize() error {
 			if !filepath.IsAbs(c.OpenCodeLogDir) {
 				return fmt.Errorf("OpenCodeLogDir must resolve to an absolute path: %s", c.OpenCodeLogDir)
 			}
+		}
+	}
+	c.JobStorageRoot = strings.TrimSpace(c.JobStorageRoot)
+	if c.JobStorageRoot == "" {
+		c.JobStorageRoot = filepath.Join(c.AgentDockHome, "jobs")
+	} else {
+		c.JobStorageRoot = filepath.Clean(c.JobStorageRoot)
+		if !filepath.IsAbs(c.JobStorageRoot) {
+			return fmt.Errorf("JobStorageRoot must resolve to an absolute path: %s", c.JobStorageRoot)
+		}
+	}
+	if err := os.MkdirAll(c.JobStorageRoot, 0o700); err != nil {
+		return fmt.Errorf("create JobStorageRoot %s: %w", c.JobStorageRoot, err)
+	}
+	if err := securepath.EnsurePrivate(c.JobStorageRoot); err != nil {
+		return fmt.Errorf("secure JobStorageRoot %s: %w", c.JobStorageRoot, err)
+	}
+	for _, limit := range []struct {
+		name  string
+		value int
+	}{
+		{"AGENTDOCK_JOB_MAX_CONCURRENT", c.JobMaxConcurrent},
+		{"AGENTDOCK_JOB_MAX_CONCURRENT_PER_WORKSPACE", c.JobMaxConcurrentPerWorkspace},
+		{"AGENTDOCK_JOB_MAX_CONCURRENT_WRITE_PER_WORKSPACE", c.JobMaxConcurrentWritePerWorkspace},
+		{"AGENTDOCK_JOB_MEMORY_OUTPUT_BYTES", c.JobMemoryOutputBytes},
+		{"AGENTDOCK_JOB_RESPONSE_OUTPUT_BYTES", c.JobResponseOutputBytes},
+		{"AGENTDOCK_JOB_DISK_SPOOL_BYTES", c.JobDiskSpoolBytes},
+		{"AGENTDOCK_JOB_RETENTION_DAYS", c.JobRetentionDays},
+		{"AGENTDOCK_JOB_RETENTION_MAX_COMPLETED", c.JobRetentionMaxCompleted},
+		{"AGENTDOCK_JOB_MAX_TIMEOUT_MS", c.JobMaxTimeoutMS},
+	} {
+		if limit.value < 0 {
+			return fmt.Errorf("%s must be zero (use default) or positive", limit.name)
 		}
 	}
 	c.BrowserExecutablePath = strings.TrimSpace(c.BrowserExecutablePath)

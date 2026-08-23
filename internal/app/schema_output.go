@@ -25,6 +25,41 @@ func OutputSchema(name string) map[string]any {
 		props["runtime"] = objectProp("OpenCode runtime identity, state, PID, health, restart count, and startup metrics.")
 		props["result"] = objectProp("Unmodified MCP tool result returned by the underlying OpenCode runtime.")
 		required = []string{"tool", "workspace", "permission_mode", "runtime", "result"}
+	case "job_start":
+		props["job_id"] = stringProp("Durable persistent job identifier.")
+		props["state"] = stringProp("Initial job state.")
+		props["created_at"] = stringProp("UTC creation timestamp.")
+		required = []string{"job_id", "state", "created_at"}
+	case "job_status", "job_cancel":
+		props["job_id"] = stringProp("Durable persistent job identifier.")
+		props["workspace"] = stringProp("Workspace bound to this job.")
+		props["tool"] = stringProp("Underlying verified OpenCode tool.")
+		props["permission_mode"] = stringProp("OpenCode permission mode.")
+		props["state"] = stringProp("Current durable job state.")
+		props["created_at"] = stringProp("UTC creation timestamp.")
+		props["started_at"] = stringProp("UTC start timestamp when available.")
+		props["finished_at"] = stringProp("UTC finish timestamp when available.")
+		props["duration_ms"] = intProp("Elapsed job duration in milliseconds.")
+		props["runtime_id"] = stringProp("Supervisor request identity when assigned.")
+		props["output_cursor"] = intProp("Current stable output cursor.")
+		props["output_bytes"] = intProp("Total logical output bytes observed.")
+		props["exit_code"] = intProp("Runtime result exit code when available.")
+		props["result_summary"] = stringProp("Redacted bounded result summary.")
+		props["error"] = stringProp("Redacted bounded error summary.")
+		props["cancel_reason"] = stringProp("Redacted cancellation reason.")
+		props["progress_metadata"] = objectProp("Redacted progress metadata when available.")
+		required = []string{"job_id", "state", "created_at", "duration_ms", "output_cursor", "output_bytes"}
+	case "job_output":
+		props["chunks"] = arrayProp("Incremental output chunks beginning at the requested cursor.")
+		props["text"] = stringProp("Concatenated text for returned chunks only.")
+		props["next_cursor"] = intProp("Cursor to pass to the next job_output request.")
+		props["truncated"] = boolProp("Whether response or retained-history bounds prevented returning every requested byte.")
+		props["complete"] = boolProp("Whether the job is terminal and this response reached the current output cursor.")
+		required = []string{"chunks", "text", "next_cursor", "truncated", "complete"}
+	case "job_list":
+		props["jobs"] = arrayProp("Bounded persistent job summaries.")
+		props["count"] = intProp("Number of returned jobs.")
+		required = []string{"jobs", "count"}
 	case "server_info":
 		props["server"] = stringProp("Server identifier.")
 		props["title"] = stringProp("Human-readable server title.")

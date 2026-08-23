@@ -16,6 +16,7 @@ import (
 	"github.com/uvwt/agentdock/internal/config"
 	"github.com/uvwt/agentdock/internal/envstore"
 	"github.com/uvwt/agentdock/internal/evolution"
+	jobruntime "github.com/uvwt/agentdock/internal/job"
 	mcpclient "github.com/uvwt/agentdock/internal/mcp/client"
 	opencoderuntime "github.com/uvwt/agentdock/internal/opencode"
 	"github.com/uvwt/agentdock/internal/taskstate"
@@ -44,6 +45,7 @@ type Runtime struct {
 	files         *toolfile.Service
 	dynamicMCP    *toolmcp.Service
 	openCode      *opencoderuntime.Supervisor
+	jobs          *jobruntime.Manager
 	media         *toolmedia.Service
 	browser       *toolbrowser.Service
 	recall        *toolrecall.Service
@@ -97,6 +99,19 @@ func NewRuntime(cfg config.Config) (*Runtime, error) {
 		}
 		runtime.openCode = supervisor
 	}
+	jobStorageRoot := cfg.JobStorageRoot
+	if jobStorageRoot == "" {
+		jobStorageRoot = filepath.Join(cfg.AgentDockHome, "jobs")
+	}
+	jobManager, err := jobruntime.NewManager(context.Background(), jobruntime.NewOpenCodeExecutor(runtime.openCode), jobruntime.Config{
+		StorageRoot: jobStorageRoot,
+		Limits:      persistentJobLimits(cfg),
+	})
+	if err != nil {
+		_ = runtime.Close()
+		return nil, fmt.Errorf("initialize persistent job manager: %w", err)
+	}
+	runtime.jobs = jobManager
 	runtime.command = toolcommand.New(func() config.Config { return runtime.cfg }, ws, envs, sessions, skills.ResolveActive, runtime.commandExecutionContext)
 	runtime.files = toolfile.New(ws, skills.ResolveResource, runtime.command.CommandEnv)
 	runtime.dynamicMCP = toolmcp.New(mcpClients, envs)
@@ -131,6 +146,38 @@ func NewRuntime(cfg config.Config) (*Runtime, error) {
 		runtime.acp = toolacp.New(manager)
 	}
 	return runtime, nil
+}
+
+func persistentJobLimits(cfg config.Config) jobruntime.Limits {
+	limits := jobruntime.DefaultLimits()
+	if cfg.JobMaxConcurrent > 0 {
+		limits.MaxConcurrentJobs = cfg.JobMaxConcurrent
+	}
+	if cfg.JobMaxConcurrentPerWorkspace > 0 {
+		limits.MaxConcurrentPerWorkspace = cfg.JobMaxConcurrentPerWorkspace
+	}
+	if cfg.JobMaxConcurrentWritePerWorkspace > 0 {
+		limits.MaxConcurrentWritePerWorkspace = cfg.JobMaxConcurrentWritePerWorkspace
+	}
+	if cfg.JobMemoryOutputBytes > 0 {
+		limits.MemoryOutputBytesPerJob = int64(cfg.JobMemoryOutputBytes)
+	}
+	if cfg.JobResponseOutputBytes > 0 {
+		limits.MaxOutputBytesPerResponse = cfg.JobResponseOutputBytes
+	}
+	if cfg.JobDiskSpoolBytes > 0 {
+		limits.MaxDiskOutputBytesPerJob = int64(cfg.JobDiskSpoolBytes)
+	}
+	if cfg.JobRetentionDays > 0 {
+		limits.Retention = time.Duration(cfg.JobRetentionDays) * 24 * time.Hour
+	}
+	if cfg.JobRetentionMaxCompleted > 0 {
+		limits.RetentionMaxCompletedJobs = cfg.JobRetentionMaxCompleted
+	}
+	if cfg.JobMaxTimeoutMS > 0 {
+		limits.MaxTimeout = time.Duration(cfg.JobMaxTimeoutMS) * time.Millisecond
+	}
+	return limits
 }
 
 func (r *Runtime) Config() config.Config           { return r.cfg }

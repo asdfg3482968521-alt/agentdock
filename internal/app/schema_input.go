@@ -25,6 +25,31 @@ func InputSchema(name string) map[string]any {
 		props["permission_mode"] = map[string]any{"type": "string", "description": "OpenCode filesystem permission mode. Defaults to project; full must be requested explicitly.", "enum": []string{"project", "full"}}
 		props["arguments"] = objectProp("Arguments forwarded unchanged to the underlying verified OpenCode tool.")
 		required = []string{"workspace", "arguments"}
+	case "job_start":
+		props["workspace"] = stringProp("Existing workspace for the persistent OpenCode job.")
+		props["tool"] = map[string]any{"type": "string", "description": "Verified OpenCode tool executed by this job.", "enum": []string{"bash", "read", "glob", "grep", "edit", "write", "apply_patch", "lsp", "git"}}
+		props["arguments"] = objectProp("Arguments forwarded unchanged to the underlying OpenCode tool. Persisted summaries are redacted separately.")
+		props["permission_mode"] = map[string]any{"type": "string", "enum": []string{"project", "full"}, "description": "OpenCode permission mode. Defaults to project."}
+		props["timeout"] = boundedIntProp("Optional job timeout in milliseconds. Timeout cancellation must fully stop the runtime request before TIMED_OUT.", 0, 86400000)
+		props["metadata"] = objectProp("Optional caller metadata. Persisted and displayed metadata is secret-redacted.")
+		props["concurrency_class"] = map[string]any{"type": "string", "enum": []string{"read", "write", "destructive"}, "description": "Optional concurrency classification. Defaults from the selected tool."}
+		required = []string{"workspace", "tool", "arguments"}
+	case "job_status":
+		props["job_id"] = stringProp("Persistent job identifier returned by job_start.")
+		required = []string{"job_id"}
+	case "job_output":
+		props["job_id"] = stringProp("Persistent job identifier returned by job_start.")
+		props["cursor"] = map[string]any{"type": "integer", "minimum": 0, "description": "Stable output cursor. Defaults to 0."}
+		props["limit"] = boundedIntProp("Maximum output bytes returned by this request. Defaults to the configured response cap.", 0, 262144)
+		required = []string{"job_id"}
+	case "job_cancel":
+		props["job_id"] = stringProp("Persistent job identifier returned by job_start.")
+		props["reason"] = stringProp("Optional cancellation reason. Persisted text is secret-redacted.")
+		required = []string{"job_id"}
+	case "job_list":
+		props["state"] = map[string]any{"type": "string", "enum": []string{"QUEUED", "STARTING", "RUNNING", "SUCCEEDED", "FAILED", "CANCEL_REQUESTED", "CANCELLED", "TIMED_OUT", "INTERRUPTED"}}
+		props["workspace"] = stringProp("Optional workspace filter.")
+		props["limit"] = boundedIntProp("Maximum jobs to return. Defaults to 50 and is capped at 200.", 1, 200)
 	case "read_file":
 		props["path"] = stringProp(toolfile.PathDescription("Host path. Relative paths resolve from ~/AgentDock."))
 		toolfile.AddRuntimeProperties(props)
@@ -405,7 +430,7 @@ func InputSchema(name string) map[string]any {
 		}
 	}
 	switch name {
-	case "opencode_bash", "opencode_read", "opencode_glob", "opencode_grep", "opencode_edit", "opencode_write", "opencode_apply_patch", "opencode_lsp", "opencode_git", "exec_command", "acp_session", "acp_prompt", "acp_interaction", "recall_bootstrap", "recall_search", "recall_read", "recall_write", "recall_maintain", "private_note_manage", "mcp_manage", "mcp_tool_search", "mcp_tool_inspect", "mcp_tool_call", "browser_session", "browser_act", "browser_snapshot":
+	case "opencode_bash", "opencode_read", "opencode_glob", "opencode_grep", "opencode_edit", "opencode_write", "opencode_apply_patch", "opencode_lsp", "opencode_git", "job_start", "job_status", "job_output", "job_cancel", "job_list", "exec_command", "acp_session", "acp_prompt", "acp_interaction", "recall_bootstrap", "recall_search", "recall_read", "recall_write", "recall_maintain", "private_note_manage", "mcp_manage", "mcp_tool_search", "mcp_tool_inspect", "mcp_tool_call", "browser_session", "browser_act", "browser_snapshot":
 		// 这些工具的参数契约需要严格收敛，避免删除或拼错的字段被静默忽略。
 		schema["additionalProperties"] = false
 	}
