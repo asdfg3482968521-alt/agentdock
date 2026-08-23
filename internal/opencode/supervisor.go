@@ -38,6 +38,7 @@ type Supervisor struct {
 	restartBackoff time.Duration
 	shutdownGrace  time.Duration
 
+	startupMu sync.Mutex
 	mu        sync.RWMutex
 	instances map[string]*runtimeInstance
 	requests  map[string]*activeExecution
@@ -216,9 +217,28 @@ func (s *Supervisor) Close() error {
 	for _, instance := range s.instances {
 		instances = append(instances, instance)
 	}
+	requests := make([]*activeExecution, 0, len(s.requests))
+	for _, request := range s.requests {
+		requests = append(requests, request)
+	}
 	s.instances = map[string]*runtimeInstance{}
 	s.mu.Unlock()
+
+	// Stop accepting new work, then cancel every Supervisor-owned asynchronous
+	// request before closing workspace runtimes. This preserves the same
+	// cancellation path used by job_cancel/timeout and prevents AgentDock
+	// shutdown from leaving an active request detached from Supervisor state.
+	for _, request := range requests {
+		request.cancel()
+	}
 	var result error
+	for _, request := range requests {
+		select {
+		case <-request.done:
+		case <-time.After(s.shutdownGrace):
+			result = errors.Join(result, newError("OPENCODE_ASYNC_SHUTDOWN_TIMEOUT", "timed out waiting for an active OpenCode request to stop", true, nil, nil))
+		}
+	}
 	for _, instance := range instances {
 		result = errors.Join(result, instance.stop())
 	}
@@ -240,6 +260,25 @@ func (i *runtimeInstance) ensureReady(ctx context.Context) error {
 
 	i.mu.RLock()
 	state, conn, restarts := i.state, i.conn, i.restartCount
+	i.mu.RUnlock()
+	if (state == StateReady || state == StateBusy) && conn != nil && connectionAlive(conn) {
+		return nil
+	}
+	if state == StateCrashed && restarts >= i.supervisor.restartCap {
+		return newError("OPENCODE_RESTART_LIMIT", "OpenCode runtime restart limit reached", false, map[string]any{"workspace": i.workspace, "restart_count": restarts}, nil)
+	}
+
+	// Frozen Windows RC1 uses shared OpenCode persistent state during process
+	// initialization. Concurrent cold starts can race the same DB migration, so
+	// serialize only the cold/restart startup section; READY runtimes still take
+	// the fast path above and execute tool calls concurrently.
+	i.supervisor.startupMu.Lock()
+	defer i.supervisor.startupMu.Unlock()
+	if i.supervisor.isClosing() {
+		return newError("OPENCODE_SUPERVISOR_CLOSING", "OpenCode supervisor is shutting down", true, nil, nil)
+	}
+	i.mu.RLock()
+	state, conn, restarts = i.state, i.conn, i.restartCount
 	i.mu.RUnlock()
 	if (state == StateReady || state == StateBusy) && conn != nil && connectionAlive(conn) {
 		return nil
