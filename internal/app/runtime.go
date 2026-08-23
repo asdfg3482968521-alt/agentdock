@@ -17,6 +17,7 @@ import (
 	"github.com/uvwt/agentdock/internal/envstore"
 	"github.com/uvwt/agentdock/internal/evolution"
 	mcpclient "github.com/uvwt/agentdock/internal/mcp/client"
+	opencoderuntime "github.com/uvwt/agentdock/internal/opencode"
 	"github.com/uvwt/agentdock/internal/taskstate"
 	toolacp "github.com/uvwt/agentdock/internal/tool/acp"
 	toolbrowser "github.com/uvwt/agentdock/internal/tool/browser"
@@ -42,6 +43,7 @@ type Runtime struct {
 	command       *toolcommand.Service
 	files         *toolfile.Service
 	dynamicMCP    *toolmcp.Service
+	openCode      *opencoderuntime.Supervisor
 	media         *toolmedia.Service
 	browser       *toolbrowser.Service
 	recall        *toolrecall.Service
@@ -83,6 +85,17 @@ func NewRuntime(cfg config.Config) (*Runtime, error) {
 	runtime := &Runtime{
 		cfg: cfg, ws: ws, skills: skills,
 		mcpClients: mcpClients, tasks: tasks, commandCtx: commandCtx, commandCancel: commandCancel,
+	}
+	if cfg.OpenCodeEnabled {
+		supervisor, err := opencoderuntime.NewSupervisor(context.Background(), opencoderuntime.Options{
+			Locator: opencoderuntime.ManifestLocator{Path: cfg.OpenCodeRuntimeManifest},
+			LogDir:  cfg.OpenCodeLogDir,
+		})
+		if err != nil {
+			_ = runtime.Close()
+			return nil, fmt.Errorf("initialize OpenCode runtime supervisor: %w", err)
+		}
+		runtime.openCode = supervisor
 	}
 	runtime.command = toolcommand.New(func() config.Config { return runtime.cfg }, ws, envs, sessions, skills.ResolveActive, runtime.commandExecutionContext)
 	runtime.files = toolfile.New(ws, skills.ResolveResource, runtime.command.CommandEnv)
@@ -138,6 +151,11 @@ func (r *Runtime) Close() error {
 		if r.acp != nil {
 			if err := r.acp.Close(); err != nil {
 				closeErrors = append(closeErrors, fmt.Errorf("close ACP runtime: %w", err))
+			}
+		}
+		if r.openCode != nil {
+			if err := r.openCode.Close(); err != nil {
+				closeErrors = append(closeErrors, fmt.Errorf("close OpenCode runtime supervisor: %w", err))
 			}
 		}
 		if r.browser != nil {
@@ -258,6 +276,10 @@ func (r *Runtime) serverInfo() Result {
 		"browser_enabled":     r.cfg.BrowserEnabled,
 		"acp_enabled":         r.cfg.ACPEnabled,
 		"acp_agent":           r.cfg.ACPAgentName,
+		"opencode_enabled":    r.cfg.OpenCodeEnabled,
+		"opencode_manifest":   r.cfg.OpenCodeRuntimeManifest,
+		"opencode_runtimes":   r.openCodeSummaries(),
+		"opencode_tools":      append([]string(nil), opencoderuntime.RequiredTools...),
 		"trusted_proxy_cidrs": append([]string(nil), r.cfg.TrustedProxyCIDRs...),
 
 		"auth_enabled":  r.authEnabled(),

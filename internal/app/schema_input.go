@@ -20,6 +20,11 @@ func InputSchema(name string) map[string]any {
 	}
 
 	switch name {
+	case "opencode_bash", "opencode_read", "opencode_glob", "opencode_grep", "opencode_edit", "opencode_write", "opencode_apply_patch", "opencode_lsp", "opencode_git":
+		props["workspace"] = stringProp("Absolute or relative existing directory bound to this OpenCode runtime. The runtime cannot widen this workspace during a tool call.")
+		props["permission_mode"] = map[string]any{"type": "string", "description": "OpenCode filesystem permission mode. Defaults to project; full must be requested explicitly.", "enum": []string{"project", "full"}}
+		props["arguments"] = objectProp("Arguments forwarded unchanged to the underlying verified OpenCode tool.")
+		required = []string{"workspace", "arguments"}
 	case "read_file":
 		props["path"] = stringProp(toolfile.PathDescription("Host path. Relative paths resolve from ~/AgentDock."))
 		toolfile.AddRuntimeProperties(props)
@@ -400,7 +405,7 @@ func InputSchema(name string) map[string]any {
 		}
 	}
 	switch name {
-	case "exec_command", "acp_session", "acp_prompt", "acp_interaction", "recall_bootstrap", "recall_search", "recall_read", "recall_write", "recall_maintain", "private_note_manage", "mcp_manage", "mcp_tool_search", "mcp_tool_inspect", "mcp_tool_call", "browser_session", "browser_act", "browser_snapshot":
+	case "opencode_bash", "opencode_read", "opencode_glob", "opencode_grep", "opencode_edit", "opencode_write", "opencode_apply_patch", "opencode_lsp", "opencode_git", "exec_command", "acp_session", "acp_prompt", "acp_interaction", "recall_bootstrap", "recall_search", "recall_read", "recall_write", "recall_maintain", "private_note_manage", "mcp_manage", "mcp_tool_search", "mcp_tool_inspect", "mcp_tool_call", "browser_session", "browser_act", "browser_snapshot":
 		// 这些工具的参数契约需要严格收敛，避免删除或拼错的字段被静默忽略。
 		schema["additionalProperties"] = false
 	}

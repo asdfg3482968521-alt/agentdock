@@ -109,9 +109,10 @@ func toolSpecByName(name string) (ToolSpec, bool) {
 	return ToolSpec{}, false
 }
 
-func requiresNexus(cfg config.Config) bool   { return cfg.NexusEndpoint != "" }
-func requiresBrowser(cfg config.Config) bool { return cfg.BrowserEnabled }
-func requiresACP(cfg config.Config) bool     { return cfg.ACPEnabled }
+func requiresNexus(cfg config.Config) bool    { return cfg.NexusEndpoint != "" }
+func requiresBrowser(cfg config.Config) bool  { return cfg.BrowserEnabled }
+func requiresACP(cfg config.Config) bool      { return cfg.ACPEnabled }
+func requiresOpenCode(cfg config.Config) bool { return cfg.OpenCodeEnabled }
 
 func mutatingToolAnnotations(destructive, openWorld bool) *ToolAnnotations {
 	return &ToolAnnotations{DestructiveHint: boolPointer(destructive), OpenWorldHint: boolPointer(openWorld)}
@@ -129,7 +130,7 @@ func ctxToolHandler(fn func(*Runtime, context.Context, map[string]any) (Result, 
 
 func allToolSpecs() []ToolSpec {
 	// 顺序保持和旧 ToolNames 一致，避免 tools/list 与 server_info 的展示顺序无谓变化。
-	return bindToolSchemas([]ToolSpec{
+	specs := []ToolSpec{
 		{Name: "server_info", Title: "Server info", Description: "Return server, host path model, auth, and exposed-tool metadata.", Handler: func(_ context.Context, r *Runtime, _ map[string]any) (Result, error) { return r.serverInfo(), nil }},
 		{Name: "agentdock_context", Title: "AgentDock context", Description: "Return AgentDock bootstrap context including available capabilities, integrations, rules, and high-priority context for clients that cannot inject system prompt context.", Handler: ctxToolHandler((*Runtime).agentDockContextTool)},
 		{Name: "read_file", Title: "Read file", Description: toolfile.ToolDescription("Read a UTF-8 text file slice. Supports normal Host paths and skill://<name>/<path> resources from the active Skill version."), Handler: ctxToolHandler((*Runtime).readFile)},
@@ -180,7 +181,40 @@ func allToolSpecs() []ToolSpec {
 		{Name: "file_publish", Title: "Publish signed file", Description: "Publish a local file or directory as an immutable Artifact snapshot under ~/.agentdock/public-artifacts. Returns artifact_id and, when a reachable base URL is available, a temporary signed download URL. Directories are packaged as tar.gz.", FileArgRewritePaths: []string{"file"}, Handler: func(ctx context.Context, r *Runtime, args map[string]any) (Result, error) {
 			return r.media.FilePublish(ctx, args)
 		}},
-	})
+	}
+	specs = append(specs, openCodeToolSpecs()...)
+	return bindToolSchemas(specs)
+}
+
+func openCodeToolSpecs() []ToolSpec {
+	definitions := []struct {
+		name        string
+		title       string
+		description string
+		destructive bool
+	}{
+		{name: "bash", title: "OpenCode bash", description: "Run the verified OpenCode model-free bash tool inside an explicit workspace runtime.", destructive: true},
+		{name: "read", title: "OpenCode read", description: "Read files through the verified OpenCode model-free read tool inside an explicit workspace runtime."},
+		{name: "glob", title: "OpenCode glob", description: "Find files through the verified OpenCode model-free glob tool inside an explicit workspace runtime."},
+		{name: "grep", title: "OpenCode grep", description: "Search text through the verified OpenCode model-free grep tool inside an explicit workspace runtime."},
+		{name: "edit", title: "OpenCode edit", description: "Edit files through the verified OpenCode model-free edit tool inside an explicit workspace runtime.", destructive: true},
+		{name: "write", title: "OpenCode write", description: "Write files through the verified OpenCode model-free write tool inside an explicit workspace runtime.", destructive: true},
+		{name: "apply_patch", title: "OpenCode apply patch", description: "Apply a patch through the verified OpenCode model-free apply_patch tool inside an explicit workspace runtime.", destructive: true},
+		{name: "lsp", title: "OpenCode LSP", description: "Query locally available language-server functionality through the verified OpenCode model-free lsp tool; runtime downloads remain disabled."},
+		{name: "git", title: "OpenCode Git", description: "Use the verified OpenCode structured Git tool inside an explicit workspace runtime.", destructive: true},
+	}
+	result := make([]ToolSpec, 0, len(definitions))
+	for _, definition := range definitions {
+		remoteTool := definition.name
+		result = append(result, ToolSpec{
+			Name: "opencode_" + remoteTool, Title: definition.title, Description: definition.description,
+			Annotations: mutatingToolAnnotations(definition.destructive, false), Availability: requiresOpenCode,
+			Handler: func(ctx context.Context, r *Runtime, args map[string]any) (Result, error) {
+				return r.openCodeTool(ctx, remoteTool, args)
+			},
+		})
+	}
+	return result
 }
 
 func bindToolSchemas(specs []ToolSpec) []ToolSpec {

@@ -8,6 +8,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"strings"
 	"time"
 
 	sdkjsonrpc "github.com/modelcontextprotocol/go-sdk/jsonrpc"
@@ -217,7 +218,7 @@ func toolEnvelope(name string, structured any, err error) map[string]any {
 			return map[string]any{"isError": false, "structuredContent": clean, "content": []map[string]any{{"type": "image", "data": data, "mimeType": mimeType}}}
 		}
 	}
-	if name == "mcp_tool_call" {
+	if name == "mcp_tool_call" || strings.HasPrefix(name, "opencode_") {
 		return dynamicMCPToolEnvelope(structured)
 	}
 	return map[string]any{"isError": false, "structuredContent": structured, "content": []map[string]any{{"type": "text", "text": pretty(structured)}}}

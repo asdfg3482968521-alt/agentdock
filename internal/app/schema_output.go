@@ -18,6 +18,13 @@ func OutputSchema(name string) map[string]any {
 	}
 
 	switch name {
+	case "opencode_bash", "opencode_read", "opencode_glob", "opencode_grep", "opencode_edit", "opencode_write", "opencode_apply_patch", "opencode_lsp", "opencode_git":
+		props["tool"] = stringProp("Underlying verified OpenCode tool name.")
+		props["workspace"] = stringProp("Canonical workspace bound to the OpenCode runtime.")
+		props["permission_mode"] = stringProp("OpenCode filesystem permission mode used by this runtime.")
+		props["runtime"] = objectProp("OpenCode runtime identity, state, PID, health, restart count, and startup metrics.")
+		props["result"] = objectProp("Unmodified MCP tool result returned by the underlying OpenCode runtime.")
+		required = []string{"tool", "workspace", "permission_mode", "runtime", "result"}
 	case "server_info":
 		props["server"] = stringProp("Server identifier.")
 		props["title"] = stringProp("Human-readable server title.")
@@ -42,6 +49,10 @@ func OutputSchema(name string) map[string]any {
 		props["browser_enabled"] = boolProp("Whether browser tools are enabled by host configuration.")
 		props["acp_enabled"] = boolProp("Whether the built-in ACP runtime is enabled by host configuration.")
 		props["acp_agent"] = stringProp("Configured local ACP agent profile name.")
+		props["opencode_enabled"] = boolProp("Whether the verified model-free OpenCode runtime integration is enabled.")
+		props["opencode_manifest"] = stringProp("Configured verified OpenCode runtime manifest path.")
+		props["opencode_runtimes"] = arrayProp("Current workspace-bound OpenCode runtime summaries.")
+		props["opencode_tools"] = map[string]any{"type": "array", "items": map[string]any{"type": "string"}}
 		props["trusted_proxy_cidrs"] = map[string]any{"type": "array", "items": map[string]any{"type": "string"}}
 		props["auth_enabled"] = boolProp("Whether MCP authentication is required.")
 		props["endpoint_path"] = stringProp("HTTP path used by the MCP endpoint.")
