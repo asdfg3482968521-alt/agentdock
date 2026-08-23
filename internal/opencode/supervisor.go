@@ -40,6 +40,7 @@ type Supervisor struct {
 
 	mu        sync.RWMutex
 	instances map[string]*runtimeInstance
+	requests  map[string]*activeExecution
 	closing   bool
 }
 
@@ -91,7 +92,7 @@ func NewSupervisor(ctx context.Context, options Options) (*Supervisor, error) {
 	return &Supervisor{
 		location: location, launcher: options.Launcher, logDir: logDir,
 		restartCap: options.RestartCap, restartBackoff: options.RestartBackoff, shutdownGrace: options.ShutdownGrace,
-		instances: map[string]*runtimeInstance{},
+		instances: map[string]*runtimeInstance{}, requests: map[string]*activeExecution{},
 	}, nil
 }
 
