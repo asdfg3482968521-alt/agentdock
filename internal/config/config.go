@@ -53,6 +53,9 @@ type Config struct {
 	ACPEnvFromEnv                map[string]string
 	ACPMaxPrompts                int
 	ACPInteractionMS             int
+	OpenCodeEnabled              bool
+	OpenCodeRuntimeManifest      string
+	OpenCodeLogDir               string
 	Stdio                        bool
 	TrustedProxyCIDRs            []string
 	InstructionsFile             string
@@ -85,6 +88,10 @@ func FromEnv() (Config, error) {
 		return Config{}, err
 	}
 	acpEnabled, err := getenvBool("AGENTDOCK_ACP_ENABLED", false)
+	if err != nil {
+		return Config{}, err
+	}
+	openCodeEnabled, err := getenvBool("AGENTDOCK_OPENCODE_ENABLED", false)
 	if err != nil {
 		return Config{}, err
 	}
@@ -138,6 +145,9 @@ func FromEnv() (Config, error) {
 		ACPEnvFromEnv:                acpEnvFromEnv,
 		ACPMaxPrompts:                acpMaxPrompts,
 		ACPInteractionMS:             acpInteractionMS,
+		OpenCodeEnabled:              openCodeEnabled,
+		OpenCodeRuntimeManifest:      strings.TrimSpace(os.Getenv("AGENTDOCK_OPENCODE_RUNTIME_MANIFEST")),
+		OpenCodeLogDir:               strings.TrimSpace(os.Getenv("AGENTDOCK_OPENCODE_LOG_DIR")),
 		Stdio:                        stdio,
 		TrustedProxyCIDRs:            splitCommaSeparated(os.Getenv("AGENTDOCK_TRUSTED_PROXY_CIDRS")),
 		InstructionsFile:             strings.TrimSpace(os.Getenv("AGENTDOCK_INSTRUCTIONS_FILE")),
@@ -184,6 +194,25 @@ func (c *Config) Normalize() error {
 			return fmt.Errorf("secure %s %s: %w", path.label, cleaned, err)
 		}
 		*path.value = cleaned
+	}
+	c.OpenCodeRuntimeManifest = strings.TrimSpace(c.OpenCodeRuntimeManifest)
+	c.OpenCodeLogDir = strings.TrimSpace(c.OpenCodeLogDir)
+	if c.OpenCodeEnabled {
+		if c.OpenCodeRuntimeManifest == "" {
+			return errors.New("AGENTDOCK_OPENCODE_RUNTIME_MANIFEST is required when OpenCode runtime integration is enabled")
+		}
+		c.OpenCodeRuntimeManifest = filepath.Clean(c.OpenCodeRuntimeManifest)
+		if !filepath.IsAbs(c.OpenCodeRuntimeManifest) {
+			return fmt.Errorf("OpenCodeRuntimeManifest must resolve to an absolute path: %s", c.OpenCodeRuntimeManifest)
+		}
+		if c.OpenCodeLogDir == "" {
+			c.OpenCodeLogDir = filepath.Join(c.AgentDockHome, "logs", "opencode")
+		} else {
+			c.OpenCodeLogDir = filepath.Clean(c.OpenCodeLogDir)
+			if !filepath.IsAbs(c.OpenCodeLogDir) {
+				return fmt.Errorf("OpenCodeLogDir must resolve to an absolute path: %s", c.OpenCodeLogDir)
+			}
+		}
 	}
 	c.BrowserExecutablePath = strings.TrimSpace(c.BrowserExecutablePath)
 	if c.BrowserExecutablePath != "" {
