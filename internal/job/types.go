@@ -78,6 +78,7 @@ type Config struct {
 
 type StartRequest struct {
 	Workspace        string
+	AgentID          string
 	Tool             string
 	Arguments        map[string]any
 	PermissionMode   string
@@ -90,6 +91,7 @@ type StartRequest struct {
 
 type StartResult struct {
 	JobID        string    `json:"job_id"`
+	AgentID      string    `json:"agent_id,omitempty"`
 	SessionID    string    `json:"session_id,omitempty"`
 	Workspace    string    `json:"workspace,omitempty"`
 	RuntimeScope string    `json:"runtime_scope,omitempty"`
@@ -99,6 +101,7 @@ type StartResult struct {
 
 type Record struct {
 	JobID            string           `json:"job_id"`
+	AgentID          string           `json:"agent_id,omitempty"`
 	SessionID        string           `json:"session_id,omitempty"`
 	Workspace        string           `json:"workspace"`
 	RuntimeScope     string           `json:"runtime_scope,omitempty"`
@@ -123,6 +126,7 @@ type Record struct {
 
 type StatusResult struct {
 	JobID            string         `json:"job_id"`
+	AgentID          string         `json:"agent_id,omitempty"`
 	SessionID        string         `json:"session_id,omitempty"`
 	Workspace        string         `json:"workspace"`
 	RuntimeScope     string         `json:"runtime_scope,omitempty"`
