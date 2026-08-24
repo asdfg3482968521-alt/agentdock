@@ -24,14 +24,30 @@ type ToolCall struct {
 	Arguments json.RawMessage `json:"arguments"`
 }
 
-type ProviderRequest struct {
-	AgentID    string
-	SessionID  string
-	Model      string
+type ProviderTool struct {
+	Name        string
+	Description string
+	InputSchema json.RawMessage
+}
+
+type ProviderMessage struct {
 	Role       string
-	Prompt     string
-	Credential credential.Secret
-	MaxTurns   int
+	Text       string
+	ToolCalls  []ToolCall
+	ToolCallID string
+}
+
+type ProviderRequest struct {
+	AgentID         string
+	SessionID       string
+	Model           string
+	Role            string
+	Prompt          string
+	Messages        []ProviderMessage
+	Tools           []ProviderTool
+	Credential      credential.Secret
+	MaxTurns        int
+	MaxOutputTokens int
 }
 
 type ProviderEvent struct {
@@ -43,6 +59,7 @@ type ProviderEvent struct {
 type ProviderResult struct {
 	Summary       string
 	ResolvedModel string
+	StopReason    string
 	Usage         Usage
 }
 
