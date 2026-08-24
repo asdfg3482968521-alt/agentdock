@@ -306,10 +306,29 @@ func marshalAnthropicRequest(request ProviderRequest, model string) ([]byte, err
 	}
 	messages := make([]map[string]any, 0, len(request.Messages)+1)
 	for _, message := range request.Messages {
-		if strings.TrimSpace(message.Text) == "" {
-			continue
+		switch message.Role {
+		case "assistant":
+			blocks := make([]map[string]any, 0, 1+len(message.ToolCalls))
+			if message.Text != "" {
+				blocks = append(blocks, map[string]any{"type": "text", "text": message.Text})
+			}
+			for _, call := range message.ToolCalls {
+				var input any
+				if len(call.Arguments) == 0 {
+					input = map[string]any{}
+				} else if err := json.Unmarshal(call.Arguments, &input); err != nil {
+					return nil, err
+				}
+				blocks = append(blocks, map[string]any{"type": "tool_use", "id": call.ID, "name": call.Name, "input": input})
+			}
+			messages = append(messages, map[string]any{"role": "assistant", "content": blocks})
+		case "tool":
+			messages = append(messages, map[string]any{"role": "user", "content": []map[string]any{{"type": "tool_result", "tool_use_id": message.ToolCallID, "content": message.Text}}})
+		default:
+			if strings.TrimSpace(message.Text) != "" {
+				messages = append(messages, map[string]any{"role": message.Role, "content": message.Text})
+			}
 		}
-		messages = append(messages, map[string]any{"role": message.Role, "content": message.Text})
 	}
 	if len(messages) == 0 || strings.TrimSpace(request.Prompt) != "" {
 		messages = append(messages, map[string]any{"role": "user", "content": request.Prompt})
@@ -339,6 +358,13 @@ func marshalDeepSeekRequest(request ProviderRequest, model string) ([]byte, erro
 	}
 	for _, message := range request.Messages {
 		entry := map[string]any{"role": message.Role, "content": message.Text}
+		if message.Role == "assistant" && len(message.ToolCalls) > 0 {
+			calls := make([]map[string]any, 0, len(message.ToolCalls))
+			for _, call := range message.ToolCalls {
+				calls = append(calls, map[string]any{"id": call.ID, "type": "function", "function": map[string]any{"name": call.Name, "arguments": string(call.Arguments)}})
+			}
+			entry["tool_calls"] = calls
+		}
 		if message.ToolCallID != "" {
 			entry["tool_call_id"] = message.ToolCallID
 		}

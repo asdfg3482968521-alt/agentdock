@@ -270,40 +270,112 @@ func (m *Manager) runAgent(ctx context.Context, id string) {
 		return
 	}
 	defer credential.Zero(secret)
+	provider := m.options.Providers[request.Provider]
+	messages := make([]ProviderMessage, 0)
+	prompt := request.Prompt
+	var lastResult ProviderResult
+
+	for {
+		if err := ctx.Err(); err != nil {
+			m.finishAgentContextError(id, lastResult, err, secret)
+			return
+		}
+		if err := m.reserveProviderRequest(id); err != nil {
+			m.finishAgent(id, AgentStateFailed, lastResult, ErrBudgetExceeded.Error())
+			return
+		}
+
+		tools := []ProviderTool(nil)
+		if m.options.Tools != nil {
+			tools = m.options.Tools.Tools(record.PermissionMode)
+		}
+		providerRequest := ProviderRequest{
+			AgentID: id, SessionID: request.SessionID, Model: request.Model, Role: request.Role, Prompt: prompt,
+			Messages: messages, Tools: tools, Credential: secret, MaxTurns: request.MaxRequests,
+		}
+		var toolCalls []ToolCall
+		var assistantText strings.Builder
+		result, runErr := provider.Run(ctx, providerRequest, func(event ProviderEvent) error {
+			if event.Text != "" {
+				assistantText.WriteString(event.Text)
+			}
+			if event.Tool != nil {
+				toolCalls = append(toolCalls, *event.Tool)
+			}
+			return m.appendEvent(id, event, secret)
+		})
+		result.Summary = sanitizeAgentText(result.Summary, secret)
+		lastResult = result
+		if runErr != nil {
+			m.finishAgentContextError(id, result, runErr, secret)
+			return
+		}
+		if len(toolCalls) == 0 {
+			m.finishAgent(id, AgentStateSucceeded, result, "")
+			return
+		}
+		if m.options.Tools == nil {
+			m.finishAgent(id, AgentStateFailed, result, ErrToolError.Error())
+			return
+		}
+
+		if len(messages) == 0 && strings.TrimSpace(request.Prompt) != "" {
+			messages = append(messages, ProviderMessage{Role: "user", Text: request.Prompt})
+		}
+		messages = append(messages, ProviderMessage{Role: "assistant", Text: assistantText.String(), ToolCalls: append([]ToolCall(nil), toolCalls...)})
+		for _, call := range toolCalls {
+			if err := ctx.Err(); err != nil {
+				m.finishAgentContextError(id, result, err, secret)
+				return
+			}
+			arguments, err := decodeToolArguments(call.Arguments)
+			if err != nil {
+				m.finishAgent(id, AgentStateFailed, result, ErrToolError.Error())
+				return
+			}
+			toolResult, err := m.options.Tools.Execute(ctx, ToolExecutionRequest{
+				AgentID: id, SessionID: record.SessionID, Workspace: record.Workspace, RuntimeScope: record.RuntimeScope,
+				PermissionMode: record.PermissionMode, Tool: call.Name, Arguments: arguments,
+			})
+			if err != nil {
+				if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+					m.finishAgentContextError(id, result, err, secret)
+					return
+				}
+				m.finishAgent(id, AgentStateFailed, result, sanitizeAgentText(err.Error(), secret))
+				return
+			}
+			text := sanitizeAgentText(toolResult.Text, secret)
+			messages = append(messages, ProviderMessage{Role: "tool", ToolCallID: call.ID, Text: text})
+			_ = m.appendEvent(id, ProviderEvent{Kind: ProviderEventText, Text: "[tool_result] " + text}, secret)
+		}
+		prompt = ""
+	}
+}
+
+func (m *Manager) reserveProviderRequest(id string) error {
 	m.mu.Lock()
-	managed = m.agents[id]
+	managed := m.agents[id]
 	if managed == nil || managed.record.RequestsUsed >= managed.record.MaxRequests {
 		m.mu.Unlock()
-		m.finishAgent(id, AgentStateFailed, ProviderResult{}, ErrBudgetExceeded.Error())
-		return
+		return ErrBudgetExceeded
 	}
 	managed.record.RequestsUsed++
 	managed.record.UpdatedAt = m.options.Now().UTC()
-	record = cloneAgentRecord(managed.record)
+	record := cloneAgentRecord(managed.record)
 	m.mu.Unlock()
-	_ = m.persistence.save(record)
-	provider := m.options.Providers[request.Provider]
-	providerRequest := ProviderRequest{
-		AgentID: id, SessionID: request.SessionID, Model: request.Model, Role: request.Role, Prompt: request.Prompt,
-		Credential: secret, MaxTurns: request.MaxRequests,
+	return m.persistence.save(record)
+}
+
+func (m *Manager) finishAgentContextError(id string, result ProviderResult, runErr error, secret []byte) {
+	state := AgentStateFailed
+	switch {
+	case errors.Is(runErr, context.Canceled):
+		state = AgentStateCancelled
+	case errors.Is(runErr, context.DeadlineExceeded):
+		state = AgentStateTimedOut
 	}
-	result, runErr := provider.Run(ctx, providerRequest, func(event ProviderEvent) error {
-		return m.appendEvent(id, event, secret)
-	})
-	result.Summary = sanitizeAgentText(result.Summary, secret)
-	if runErr != nil {
-		state := AgentStateFailed
-		switch {
-		case errors.Is(runErr, context.Canceled):
-			state = AgentStateCancelled
-		case errors.Is(runErr, context.DeadlineExceeded):
-			state = AgentStateTimedOut
-		}
-		message := sanitizeAgentText(runErr.Error(), secret)
-		m.finishAgent(id, state, result, message)
-		return
-	}
-	m.finishAgent(id, AgentStateSucceeded, result, "")
+	m.finishAgent(id, state, result, sanitizeAgentText(runErr.Error(), secret))
 }
 
 func (m *Manager) appendEvent(id string, event ProviderEvent, secret credential.Secret) error {

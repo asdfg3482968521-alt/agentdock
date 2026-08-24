@@ -120,6 +120,69 @@ func TestDeepSeekProviderRequestAndToolResponse(t *testing.T) {
 	}
 }
 
+func TestAnthropicProviderEncodesToolLoopMessages(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Fatal(err)
+		}
+		messages, ok := body["messages"].([]any)
+		if !ok || len(messages) != 3 {
+			t.Fatalf("messages=%#v", body["messages"])
+		}
+		assistant := messages[1].(map[string]any)
+		blocks, ok := assistant["content"].([]any)
+		if !ok || len(blocks) != 2 {
+			t.Fatalf("assistant content=%#v", assistant["content"])
+		}
+		toolResult := messages[2].(map[string]any)
+		resultBlocks, ok := toolResult["content"].([]any)
+		if !ok || len(resultBlocks) != 1 || resultBlocks[0].(map[string]any)["type"] != "tool_result" {
+			t.Fatalf("tool result=%#v", toolResult)
+		}
+		fmt.Fprint(w, `{"model":"claude-opus-5","content":[{"type":"text","text":"done"}],"stop_reason":"end_turn","usage":{"input_tokens":1,"output_tokens":1}}`)
+	}))
+	defer server.Close()
+	provider := NewAnthropicProvider(ProviderHTTPOptions{BaseURL: server.URL})
+	_, err := provider.Run(context.Background(), ProviderRequest{Model: "default", Credential: credential.Secret("synthetic"), Messages: []ProviderMessage{
+		{Role: "user", Text: "read"},
+		{Role: "assistant", Text: "checking", ToolCalls: []ToolCall{{ID: "call-1", Name: "opencode_read", Arguments: json.RawMessage(`{"filePath":"README.md"}`)}}},
+		{Role: "tool", ToolCallID: "call-1", Text: "contents"},
+	}}, func(ProviderEvent) error { return nil })
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestDeepSeekProviderEncodesToolLoopMessages(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Fatal(err)
+		}
+		messages := body["messages"].([]any)
+		assistant := messages[1].(map[string]any)
+		if _, ok := assistant["tool_calls"].([]any); !ok {
+			t.Fatalf("assistant=%#v", assistant)
+		}
+		toolMessage := messages[2].(map[string]any)
+		if toolMessage["role"] != "tool" || toolMessage["tool_call_id"] != "call-1" {
+			t.Fatalf("tool=%#v", toolMessage)
+		}
+		fmt.Fprint(w, `{"model":"deepseek-v4-flash","choices":[{"message":{"content":"done"},"finish_reason":"stop"}],"usage":{"prompt_tokens":1,"completion_tokens":1,"total_tokens":2}}`)
+	}))
+	defer server.Close()
+	provider := NewDeepSeekProvider(ProviderHTTPOptions{BaseURL: server.URL})
+	_, err := provider.Run(context.Background(), ProviderRequest{Model: "default", Credential: credential.Secret("synthetic"), Messages: []ProviderMessage{
+		{Role: "user", Text: "read"},
+		{Role: "assistant", Text: "checking", ToolCalls: []ToolCall{{ID: "call-1", Name: "opencode_read", Arguments: json.RawMessage(`{"filePath":"README.md"}`)}}},
+		{Role: "tool", ToolCallID: "call-1", Text: "contents"},
+	}}, func(ProviderEvent) error { return nil })
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestProviderAuthFailureIsNotRetriedAndDoesNotLeakCredential(t *testing.T) {
 	const secret = "D2_TEST_SECRET_auth_failure"
 	var calls atomic.Int32

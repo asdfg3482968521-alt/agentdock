@@ -41,6 +41,7 @@ var (
 	ErrProviderUnsupported           = errors.New("provider unsupported")
 	ErrBudgetExceeded                = errors.New("budget exceeded")
 	ErrResourceLimit                 = errors.New("resource limit")
+	ErrToolError                     = errors.New("tool error")
 )
 
 type SessionBinding struct {
@@ -79,6 +80,7 @@ type ManagerOptions struct {
 	Sessions    SessionResolver
 	Credentials credential.Resolver
 	Providers   map[string]ProviderAdapter
+	Tools       ToolBridge
 	Limits      AgentLimits
 	Now         func() time.Time
 	IDFactory   func() string
