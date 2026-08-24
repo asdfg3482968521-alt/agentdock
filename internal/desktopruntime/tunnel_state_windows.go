@@ -13,11 +13,9 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
-	"unsafe"
-
-	"golang.org/x/sys/windows"
 
 	"github.com/uvwt/agentdock/internal/fs/atomicfile"
+	"github.com/uvwt/agentdock/internal/securedata"
 )
 
 const tunnelTokenEntropy = "agentdock.cloudflare.tunnel.v1"
@@ -212,15 +210,10 @@ func writeProtectedText(path, value, entropy string) error {
 	if len(plain) == 0 {
 		return errors.New("DPAPI 明文不能为空")
 	}
-	entropyBytes := []byte(entropy)
-	input := windows.DataBlob{Size: uint32(len(plain)), Data: &plain[0]}
-	optionalEntropy := windows.DataBlob{Size: uint32(len(entropyBytes)), Data: &entropyBytes[0]}
-	var output windows.DataBlob
-	if err := windows.CryptProtectData(&input, nil, &optionalEntropy, 0, nil, 0, &output); err != nil {
+	protected, err := securedata.Protect(plain, []byte(entropy))
+	if err != nil {
 		return err
 	}
-	defer windows.LocalFree(windows.Handle(uintptr(unsafe.Pointer(output.Data))))
-	protected := unsafe.Slice(output.Data, int(output.Size))
-	encoded := base64.StdEncoding.EncodeToString(append([]byte(nil), protected...))
+	encoded := base64.StdEncoding.EncodeToString(protected)
 	return atomicfile.Write(path, []byte(encoded), 0o600)
 }

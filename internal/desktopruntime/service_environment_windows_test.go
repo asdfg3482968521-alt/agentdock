@@ -3,8 +3,11 @@
 package desktopruntime
 
 import (
+	"bytes"
+	"encoding/base64"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -47,5 +50,33 @@ func TestLoadControlPanelSettingsValidatesOAuthAccessTokenTTL(t *testing.T) {
 	}
 	if _, err := loadControlPanelSettings(root, 8765); err == nil {
 		t.Fatal("loadControlPanelSettings() accepted invalid OAuth access token TTL")
+	}
+}
+
+func TestProtectedTextRoundTripKeepsCiphertextAtRest(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "secret.dpapi")
+	secret := "D2_TEST_SECRET_desktopruntime_roundtrip"
+	entropy := "agentdock.d2.desktopruntime.regression.v1"
+
+	if err := writeProtectedText(path, secret, entropy); err != nil {
+		t.Fatalf("writeProtectedText() error = %v", err)
+	}
+	stored, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("ReadFile() error = %v", err)
+	}
+	if bytes.Contains(stored, []byte(secret)) {
+		t.Fatal("protected file contains plaintext marker")
+	}
+	if _, err := base64.StdEncoding.DecodeString(strings.TrimSpace(string(stored))); err != nil {
+		t.Fatalf("protected file is not base64 DPAPI data: %v", err)
+	}
+
+	got, err := readProtectedText(path, entropy)
+	if err != nil {
+		t.Fatalf("readProtectedText() error = %v", err)
+	}
+	if got != secret {
+		t.Fatalf("readProtectedText() = %q, want %q", got, secret)
 	}
 }

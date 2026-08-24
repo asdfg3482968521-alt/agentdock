@@ -11,10 +11,9 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
-	"unsafe"
 
 	agentconfig "github.com/uvwt/agentdock/internal/config"
-	"golang.org/x/sys/windows"
+	"github.com/uvwt/agentdock/internal/securedata"
 )
 
 var managedCoreEnvironment = []string{
@@ -234,16 +233,11 @@ func readProtectedText(path, entropy string) (string, error) {
 	if len(ciphertext) == 0 {
 		return "", errors.New("DPAPI 数据为空")
 	}
-	entropyBytes := []byte(entropy)
-	input := windows.DataBlob{Size: uint32(len(ciphertext)), Data: &ciphertext[0]}
-	optionalEntropy := windows.DataBlob{Size: uint32(len(entropyBytes)), Data: &entropyBytes[0]}
-	var output windows.DataBlob
-	if err := windows.CryptUnprotectData(&input, nil, &optionalEntropy, 0, nil, 0, &output); err != nil {
+	plain, err := securedata.Unprotect(ciphertext, []byte(entropy))
+	if err != nil {
 		return "", err
 	}
-	defer windows.LocalFree(windows.Handle(uintptr(unsafe.Pointer(output.Data))))
-	plain := unsafe.Slice(output.Data, int(output.Size))
-	return string(append([]byte(nil), plain...)), nil
+	return string(plain), nil
 }
 
 func readTrimmedText(path string) (string, error) {
