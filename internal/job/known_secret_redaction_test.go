@@ -49,8 +49,8 @@ func TestAgentOwnedJobKnownSecretRedactedBeforePersistence(t *testing.T) {
 	if !strings.Contains(out.Text, "[REDACTED]") {
 		t.Fatalf("known secret was not visibly redacted from job output: %q", out.Text)
 	}
-	assertJobDiskHasNoKnownSecret(t, cfg.StorageRoot, started.JobID, secret)
 	waitJobMetadataState(t, cfg.StorageRoot, started.JobID, StateSucceeded)
+	assertJobDiskHasNoKnownSecret(t, cfg.StorageRoot, started.JobID, secret)
 
 	manager.mu.RLock()
 	retained := len(manager.jobs[started.JobID].knownSecrets)

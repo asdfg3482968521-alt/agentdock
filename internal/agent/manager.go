@@ -19,11 +19,13 @@ import (
 )
 
 type managedAgent struct {
-	record  Record
-	request *StartRequest
-	cancel  context.CancelFunc
-	done    chan struct{}
-	once    sync.Once
+	record      Record
+	request     *StartRequest
+	cancel      context.CancelFunc
+	done        chan struct{}
+	once        sync.Once
+	finalizing  bool
+	finalizeErr error
 }
 
 type Manager struct {
@@ -558,6 +560,10 @@ func (m *Manager) finishAgent(id string, state AgentState, result ProviderResult
 		m.mu.Unlock()
 		return
 	}
+	if managed.finalizing {
+		m.mu.Unlock()
+		return
+	}
 	current := managed.record.State
 	if current == AgentStateCancelRequested && state == AgentStateFailed {
 		state = AgentStateCancelled
@@ -569,21 +575,22 @@ func (m *Manager) finishAgent(id string, state AgentState, result ProviderResult
 		}
 	}
 	now := m.options.Now().UTC()
-	managed.record.State = state
-	managed.record.FinishedAt = &now
-	managed.record.UpdatedAt = now
+	record := cloneAgentRecord(managed.record)
+	record.State = state
+	record.FinishedAt = &now
+	record.UpdatedAt = now
 	if strings.TrimSpace(result.ResolvedModel) != "" {
-		managed.record.ResolvedModel = result.ResolvedModel
-		managed.record.Model = result.ResolvedModel
+		record.ResolvedModel = result.ResolvedModel
+		record.Model = result.ResolvedModel
 	}
-	managed.record.StopReason = result.StopReason
-	managed.record.ResultSummary = sanitizeAgentText(result.Summary, secret)
-	managed.record.FailureReason = nil
-	managed.record.Error = ""
+	record.StopReason = result.StopReason
+	record.ResultSummary = sanitizeAgentText(result.Summary, secret)
+	record.FailureReason = nil
+	record.Error = ""
 	if failure != nil {
 		envelope := AgentErrorFrom(failure, secret)
-		managed.record.FailureReason = &envelope
-		managed.record.Error = envelope.Message
+		record.FailureReason = &envelope
+		record.Error = envelope.Message
 	}
 	managed.request = nil
 	if managed.cancel != nil {
@@ -591,11 +598,21 @@ func (m *Manager) finishAgent(id string, state AgentState, result ProviderResult
 		managed.cancel = nil
 	}
 	m.releaseRunLocked(managed)
-	record := cloneAgentRecord(managed.record)
-	managed.once.Do(func() { close(managed.done) })
+	managed.finalizing = true
+	managed.finalizeErr = nil
 	m.scheduleLocked()
 	m.mu.Unlock()
-	_ = m.persistence.save(record)
+
+	persistErr := m.persistence.save(record)
+
+	m.mu.Lock()
+	if persistErr == nil {
+		managed.record = record
+	}
+	managed.finalizing = false
+	managed.finalizeErr = persistErr
+	managed.once.Do(func() { close(managed.done) })
+	m.mu.Unlock()
 }
 
 func (m *Manager) releaseRunLocked(managed *managedAgent) {
@@ -645,6 +662,9 @@ func (m *Manager) Wait(ctx context.Context, agentID string) (Record, error) {
 	case <-done:
 		m.mu.Lock()
 		defer m.mu.Unlock()
+		if managed.finalizeErr != nil {
+			return Record{}, managed.finalizeErr
+		}
 		return cloneAgentRecord(managed.record), nil
 	}
 }
@@ -663,7 +683,27 @@ func (m *Manager) Cancel(ctx context.Context, sessionID, agentID, reason string)
 		m.mu.Unlock()
 		return Record{}, ErrAgentSessionOwnershipMismatch
 	}
+	if managed.finalizing {
+		done := managed.done
+		m.mu.Unlock()
+		select {
+		case <-ctx.Done():
+			return Record{}, ctx.Err()
+		case <-done:
+			m.mu.Lock()
+			defer m.mu.Unlock()
+			if managed.finalizeErr != nil {
+				return Record{}, managed.finalizeErr
+			}
+			return cloneAgentRecord(managed.record), nil
+		}
+	}
 	if managed.record.State.Terminal() {
+		if managed.finalizeErr != nil {
+			err := managed.finalizeErr
+			m.mu.Unlock()
+			return Record{}, err
+		}
 		result := cloneAgentRecord(managed.record)
 		m.mu.Unlock()
 		return result, nil
@@ -676,18 +716,31 @@ func (m *Manager) Cancel(ctx context.Context, sessionID, agentID, reason string)
 	if managed.record.State == AgentStateQueued {
 		m.removeQueuedLocked(managed.record.AgentID)
 		now := m.options.Now().UTC()
-		managed.record.State = AgentStateCancelled
-		managed.record.FinishedAt = &now
-		managed.record.UpdatedAt = now
-		managed.record.Error = redact.Text(strings.TrimSpace(reason))
-		managed.request = nil
 		record := cloneAgentRecord(managed.record)
-		managed.once.Do(func() { close(managed.done) })
+		record.State = AgentStateCancelled
+		record.FinishedAt = &now
+		record.UpdatedAt = now
+		record.Error = redact.Text(strings.TrimSpace(reason))
+		managed.request = nil
+		managed.finalizing = true
+		managed.finalizeErr = nil
 		m.mu.Unlock()
-		if err := m.persistence.save(record); err != nil {
-			return Record{}, err
+
+		persistErr := m.persistence.save(record)
+
+		m.mu.Lock()
+		if persistErr == nil {
+			managed.record = record
 		}
-		return record, nil
+		managed.finalizing = false
+		managed.finalizeErr = persistErr
+		managed.once.Do(func() { close(managed.done) })
+		result := cloneAgentRecord(managed.record)
+		m.mu.Unlock()
+		if persistErr != nil {
+			return Record{}, persistErr
+		}
+		return result, nil
 	}
 	if managed.record.State == AgentStateStarting || managed.record.State == AgentStateRunning {
 		managed.record.State = AgentStateCancelRequested
@@ -707,6 +760,9 @@ func (m *Manager) Cancel(ctx context.Context, sessionID, agentID, reason string)
 	case <-done:
 		m.mu.Lock()
 		defer m.mu.Unlock()
+		if managed.finalizeErr != nil {
+			return Record{}, managed.finalizeErr
+		}
 		return cloneAgentRecord(managed.record), nil
 	}
 }

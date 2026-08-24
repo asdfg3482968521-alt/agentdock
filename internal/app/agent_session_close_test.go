@@ -2,6 +2,8 @@ package app
 
 import (
 	"context"
+	"encoding/json"
+	"os"
 	"path/filepath"
 	"sync"
 	"testing"
@@ -145,6 +147,17 @@ func TestSessionCloseCancelsAgentsBeforeJobsAndPreservesOtherSession(t *testing.
 	}
 	if !agentSawJobAActive {
 		t.Fatal("Session close did not cancel/await Agent A before cancelling Job A")
+	}
+	durableBody, err := os.ReadFile(filepath.Join(agentManager.StorageRoot(), "records", agentA.AgentID+".json"))
+	if err != nil {
+		t.Fatalf("read Agent A durable record immediately after session_close: %v", err)
+	}
+	var durableAgent agentruntime.Record
+	if err := json.Unmarshal(durableBody, &durableAgent); err != nil {
+		t.Fatalf("parse Agent A durable record: %v", err)
+	}
+	if durableAgent.State != agentruntime.AgentStateCancelled {
+		t.Fatalf("session_close returned before Agent A terminal durability: %s", durableAgent.State)
 	}
 	if got := waitAgentAppState(t, agentManager, a.SessionID, agentA.AgentID, agentruntime.AgentStateCancelled); got.State != agentruntime.AgentStateCancelled {
 		t.Fatalf("Agent A state=%s", got.State)

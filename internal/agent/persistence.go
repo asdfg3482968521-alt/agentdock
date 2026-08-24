@@ -17,6 +17,10 @@ type agentPersistence struct {
 	root       string
 	recordsDir string
 	outputDir  string
+
+	// beforeSave is an internal test seam used to deterministically observe or
+	// fail a persistence boundary. Production instances leave it nil.
+	beforeSave func(Record) error
 }
 
 func newAgentPersistence(root string) (*agentPersistence, error) {
@@ -37,6 +41,11 @@ func newAgentPersistence(root string) (*agentPersistence, error) {
 }
 
 func (p *agentPersistence) save(record Record) error {
+	if p.beforeSave != nil {
+		if err := p.beforeSave(record); err != nil {
+			return err
+		}
+	}
 	data, err := json.Marshal(record)
 	if err != nil {
 		return err
