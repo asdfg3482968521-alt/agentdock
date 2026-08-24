@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"strings"
 
+	agentruntime "github.com/uvwt/agentdock/internal/agent"
 	opencoderuntime "github.com/uvwt/agentdock/internal/opencode"
 	sessionruntime "github.com/uvwt/agentdock/internal/session"
 	toolcore "github.com/uvwt/agentdock/internal/tool/core"
@@ -100,6 +101,16 @@ func (r *Runtime) d1SessionClose(ctx context.Context, args map[string]any) (Resu
 	}
 	if current.State == sessionruntime.StateFailed {
 		return nil, toolError(sessionruntime.CodeFailed, "failed session cannot be closed in D1; filesystem state is preserved", "session")
+	}
+	if current.State != sessionruntime.StateClosed && r.agents != nil {
+		for _, agent := range r.agents.List(agentruntime.ListFilter{SessionID: sessionID, Limit: 200}) {
+			if agent.State.Terminal() {
+				continue
+			}
+			if _, cancelErr := r.agents.Cancel(ctx, sessionID, agent.AgentID, "session_close"); cancelErr != nil {
+				return nil, toolErrorCause(sessionruntime.CodeFailed, "failed to stop an owned Agent during session_close", "session", map[string]any{"agent_id": agent.AgentID}, cancelErr)
+			}
+		}
 	}
 	jobsCancelled := make([]string, 0)
 	if current.State != sessionruntime.StateClosed && r.jobs != nil {

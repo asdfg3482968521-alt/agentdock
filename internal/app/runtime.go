@@ -12,8 +12,10 @@ import (
 	"time"
 
 	acpruntime "github.com/uvwt/agentdock/internal/acp"
+	agentruntime "github.com/uvwt/agentdock/internal/agent"
 	"github.com/uvwt/agentdock/internal/buildinfo"
 	"github.com/uvwt/agentdock/internal/config"
+	"github.com/uvwt/agentdock/internal/credential"
 	"github.com/uvwt/agentdock/internal/envstore"
 	"github.com/uvwt/agentdock/internal/evolution"
 	jobruntime "github.com/uvwt/agentdock/internal/job"
@@ -48,6 +50,7 @@ type Runtime struct {
 	openCode      *opencoderuntime.Supervisor
 	jobs          *jobruntime.Manager
 	sessions      *sessionruntime.Manager
+	agents        *agentruntime.Manager
 	media         *toolmedia.Service
 	browser       *toolbrowser.Service
 	recall        *toolrecall.Service
@@ -123,6 +126,27 @@ func NewRuntime(cfg config.Config) (*Runtime, error) {
 		return nil, fmt.Errorf("initialize persistent job manager: %w", err)
 	}
 	runtime.jobs = jobManager
+	credentialStore, err := credential.NewStore(cfg.AgentDockHome)
+	if err != nil {
+		_ = runtime.Close()
+		return nil, fmt.Errorf("initialize credential store: %w", err)
+	}
+	agentManager, err := agentruntime.NewManager(context.Background(), agentruntime.ManagerOptions{
+		StorageRoot: filepath.Join(cfg.AgentDockHome, "agents"),
+		Sessions:    newAgentSessionResolver(runtime),
+		Credentials: credentialStore,
+		Providers: map[string]agentruntime.ProviderAdapter{
+			"anthropic": agentruntime.NewAnthropicProvider(agentruntime.ProviderHTTPOptions{}),
+			"deepseek":  agentruntime.NewDeepSeekProvider(agentruntime.ProviderHTTPOptions{}),
+		},
+		Tools:  newAgentToolBridge(runtime),
+		Limits: agentruntime.DefaultAgentLimits(),
+	})
+	if err != nil {
+		_ = runtime.Close()
+		return nil, fmt.Errorf("initialize Agent runtime: %w", err)
+	}
+	runtime.agents = agentManager
 	runtime.command = toolcommand.New(func() config.Config { return runtime.cfg }, ws, envs, sessions, skills.ResolveActive, runtime.commandExecutionContext)
 	runtime.files = toolfile.New(ws, skills.ResolveResource, runtime.command.CommandEnv)
 	runtime.dynamicMCP = toolmcp.New(mcpClients, envs)
@@ -209,6 +233,11 @@ func (r *Runtime) Close() error {
 		if r.acp != nil {
 			if err := r.acp.Close(); err != nil {
 				closeErrors = append(closeErrors, fmt.Errorf("close ACP runtime: %w", err))
+			}
+		}
+		if r.agents != nil {
+			if err := r.agents.Close(); err != nil {
+				closeErrors = append(closeErrors, fmt.Errorf("close Agent runtime: %w", err))
 			}
 		}
 		if r.openCode != nil {
