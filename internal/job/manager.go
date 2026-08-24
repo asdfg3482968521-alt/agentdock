@@ -176,7 +176,7 @@ func (m *Manager) Start(request StartRequest) (StartResult, error) {
 	}
 	args := cloneMap(request.Arguments)
 	record := Record{
-		JobID: jobID, Workspace: strings.TrimSpace(request.Workspace), Tool: strings.TrimSpace(request.Tool), PermissionMode: mode,
+		JobID: jobID, SessionID: strings.TrimSpace(request.SessionID), Workspace: strings.TrimSpace(request.Workspace), RuntimeScope: strings.TrimSpace(request.RuntimeScope), Tool: strings.TrimSpace(request.Tool), PermissionMode: mode,
 		ArgumentsSummary: summarize(request.Arguments, m.config.Limits.MaxArgumentSummaryBytes, m.config.RedactText),
 		CreatedAt:        created, State: StateQueued, ConcurrencyClass: class,
 	}
@@ -210,7 +210,7 @@ func (m *Manager) Start(request StartRequest) (StartResult, error) {
 	m.mu.Unlock()
 	go m.drain()
 	go func() { _ = m.cleanupRetention() }()
-	return StartResult{JobID: jobID, State: StateQueued, CreatedAt: created}, nil
+	return StartResult{JobID: jobID, SessionID: record.SessionID, Workspace: record.Workspace, RuntimeScope: record.RuntimeScope, State: StateQueued, CreatedAt: created}, nil
 }
 
 func (m *Manager) validateStart(request StartRequest) error {
@@ -229,6 +229,11 @@ func (m *Manager) validateStart(request StartRequest) error {
 	}
 	if request.ConcurrencyClass != "" && request.ConcurrencyClass != ConcurrencyRead && request.ConcurrencyClass != ConcurrencyWrite && request.ConcurrencyClass != ConcurrencyDestructive {
 		return errors.New("invalid concurrency_class")
+	}
+	sessionID := strings.TrimSpace(request.SessionID)
+	runtimeScope := strings.TrimSpace(request.RuntimeScope)
+	if (sessionID == "") != (runtimeScope == "") {
+		return errors.New("session_id and runtime_scope must be provided together")
 	}
 	return nil
 }
@@ -257,6 +262,7 @@ func (m *Manager) List(filter ListFilter) []StatusResult {
 		limit = 200
 	}
 	workspace := strings.TrimSpace(filter.Workspace)
+	sessionID := strings.TrimSpace(filter.SessionID)
 	m.mu.RLock()
 	items := make([]StatusResult, 0, len(m.jobs))
 	for _, job := range m.jobs {
@@ -264,6 +270,9 @@ func (m *Manager) List(filter ListFilter) []StatusResult {
 			continue
 		}
 		if workspace != "" && workspaceKey(job.record.Workspace) != workspaceKey(workspace) {
+			continue
+		}
+		if sessionID != "" && job.record.SessionID != sessionID {
 			continue
 		}
 		items = append(items, m.statusLocked(job))
@@ -708,7 +717,7 @@ func (m *Manager) statusLocked(job *managedJob) StatusResult {
 		}
 	}
 	return StatusResult{
-		JobID: job.record.JobID, Workspace: job.record.Workspace, Tool: job.record.Tool, PermissionMode: job.record.PermissionMode,
+		JobID: job.record.JobID, SessionID: job.record.SessionID, Workspace: job.record.Workspace, RuntimeScope: job.record.RuntimeScope, Tool: job.record.Tool, PermissionMode: job.record.PermissionMode,
 		State: job.record.State, CreatedAt: job.record.CreatedAt, StartedAt: job.record.StartedAt, FinishedAt: job.record.FinishedAt,
 		DurationMS: maxInt64(0, end.Sub(start).Milliseconds()), RuntimeID: job.record.RuntimeID, OutputCursor: job.record.OutputCursor,
 		OutputBytes: job.record.OutputBytes, ExitCode: job.record.ExitCode, ResultSummary: job.record.ResultSummary, Error: job.record.Error,

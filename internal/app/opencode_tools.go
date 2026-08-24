@@ -20,13 +20,25 @@ func (r *Runtime) openCodeTool(ctx context.Context, remoteTool string, args map[
 	if r.openCode == nil {
 		return nil, toolError("OPENCODE_DISABLED", "OpenCode runtime integration is disabled", "opencode")
 	}
+	sessionID := strings.TrimSpace(toolcore.StringArg(args, "session_id", ""))
 	workspace := strings.TrimSpace(toolcore.StringArg(args, "workspace", ""))
-	if workspace == "" {
-		return nil, toolError("OPENCODE_WORKSPACE_REQUIRED", "workspace is required", "opencode")
+	permissionMode := toolcore.StringArg(args, "permission_mode", "project")
+	if sessionID != "" {
+		record, err := r.resolveD1SessionRoute(sessionID, workspace, openCodeToolMutates(remoteTool))
+		if err != nil {
+			return nil, err
+		}
+		workspace = record.Workspace()
+		permissionMode = record.PermissionMode
+		if _, err := r.sessions.SetRuntime(sessionID, d1RuntimeScope(sessionID)); err != nil {
+			return nil, sessionToolError(err)
+		}
+	} else if workspace == "" {
+		return nil, toolError("OPENCODE_WORKSPACE_REQUIRED", "workspace or session_id is required", "opencode")
 	}
-	mode, err := opencoderuntime.ParsePermissionMode(toolcore.StringArg(args, "permission_mode", "project"))
+	mode, err := opencoderuntime.ParsePermissionMode(permissionMode)
 	if err != nil {
-		return nil, toolErrorDetails("OPENCODE_PERMISSION_INVALID", err.Error(), "opencode", map[string]any{"permission_mode": args["permission_mode"]})
+		return nil, toolErrorDetails("OPENCODE_PERMISSION_INVALID", err.Error(), "opencode", map[string]any{"permission_mode": permissionMode})
 	}
 	remoteArguments, ok := args["arguments"].(map[string]any)
 	if !ok || remoteArguments == nil {
@@ -36,13 +48,18 @@ func (r *Runtime) openCodeTool(ctx context.Context, remoteTool string, args map[
 	if err != nil {
 		return nil, openCodeToolError(err)
 	}
-	return Result{
+	result := Result{
 		"tool":            execution.Tool,
 		"workspace":       execution.Workspace,
 		"permission_mode": execution.PermissionMode,
 		"runtime":         execution.Runtime,
 		"result":          execution.Result,
-	}, nil
+	}
+	if sessionID != "" {
+		result["session_id"] = sessionID
+		result["runtime_scope"] = d1RuntimeScope(sessionID)
+	}
+	return result, nil
 }
 
 func openCodeToolError(err error) error {

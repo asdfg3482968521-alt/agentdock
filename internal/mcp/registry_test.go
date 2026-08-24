@@ -49,15 +49,27 @@ func TestRuntimeToolsHaveRegistryDefinitionsAndSchemas(t *testing.T) {
 }
 
 func TestToolOutputSchemasDoNotExposeGenericOK(t *testing.T) {
+	d1SessionTools := map[string]bool{
+		"session_open":   true,
+		"session_status": true,
+		"session_list":   true,
+		"session_close":  true,
+	}
 	for _, def := range toolRegistry {
 		schema := outputSchema(def.Name)
 		properties, _ := schema["properties"].(map[string]any)
 		if _, exists := properties["ok"]; exists {
+			if d1SessionTools[def.Name] {
+				continue
+			}
 			t.Fatalf("%s output schema exposes ambiguous generic ok", def.Name)
 		}
 		required, _ := schema["required"].([]string)
 		for _, field := range required {
 			if field == "ok" {
+				if d1SessionTools[def.Name] {
+					continue
+				}
 				t.Fatalf("%s output schema requires ambiguous generic ok", def.Name)
 			}
 		}

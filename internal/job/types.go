@@ -81,20 +81,27 @@ type StartRequest struct {
 	Tool             string
 	Arguments        map[string]any
 	PermissionMode   string
+	SessionID        string
+	RuntimeScope     string
 	Timeout          time.Duration
 	Metadata         map[string]any
 	ConcurrencyClass ConcurrencyClass
 }
 
 type StartResult struct {
-	JobID     string    `json:"job_id"`
-	State     State     `json:"state"`
-	CreatedAt time.Time `json:"created_at"`
+	JobID        string    `json:"job_id"`
+	SessionID    string    `json:"session_id,omitempty"`
+	Workspace    string    `json:"workspace,omitempty"`
+	RuntimeScope string    `json:"runtime_scope,omitempty"`
+	State        State     `json:"state"`
+	CreatedAt    time.Time `json:"created_at"`
 }
 
 type Record struct {
 	JobID            string           `json:"job_id"`
+	SessionID        string           `json:"session_id,omitempty"`
 	Workspace        string           `json:"workspace"`
+	RuntimeScope     string           `json:"runtime_scope,omitempty"`
 	Tool             string           `json:"tool"`
 	PermissionMode   string           `json:"permission_mode"`
 	ArgumentsSummary string           `json:"arguments_summary"`
@@ -116,7 +123,9 @@ type Record struct {
 
 type StatusResult struct {
 	JobID            string         `json:"job_id"`
+	SessionID        string         `json:"session_id,omitempty"`
 	Workspace        string         `json:"workspace"`
+	RuntimeScope     string         `json:"runtime_scope,omitempty"`
 	Tool             string         `json:"tool"`
 	PermissionMode   string         `json:"permission_mode"`
 	State            State          `json:"state"`
@@ -137,6 +146,7 @@ type StatusResult struct {
 type ListFilter struct {
 	State     State
 	Workspace string
+	SessionID string
 	Limit     int
 }
 

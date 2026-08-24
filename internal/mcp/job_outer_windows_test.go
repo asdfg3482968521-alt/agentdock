@@ -252,8 +252,15 @@ func TestExternalAgentDockPersistentJobsWindowsE2E(t *testing.T) {
 		if state := stringValue(status3["state"]); state == "CANCELLED" || state == "FAILED" || state == "TIMED_OUT" {
 			t.Fatalf("cancelling workspace A killed workspace B: %#v", status3)
 		}
-		final2, _ := waitJobState(t, session, id2, 35*time.Second, "SUCCEEDED")
-		final3, _ := waitJobState(t, session, id3, 35*time.Second, "SUCCEEDED")
+		// RUNNING means the durable job's asynchronous Supervisor request was
+		// registered; it does not mean that workspace's cold runtime is READY yet.
+		// Windows RC1 intentionally serializes cold starts, and cancelling A1 while
+		// it is still initializing can therefore be followed by B's cold start and
+		// then A2's cold start. Keep production concurrency semantics unchanged and
+		// give this external integration assertion enough wall-clock budget for all
+		// three startup phases plus the intentional sleeps above.
+		final2, _ := waitJobState(t, session, id2, 120*time.Second, "SUCCEEDED")
+		final3, _ := waitJobState(t, session, id3, 120*time.Second, "SUCCEEDED")
 		if !strings.Contains(stringValue(final2["result_summary"]), "A2-done") || !strings.Contains(stringValue(final3["result_summary"]), "B3-done") {
 			t.Fatalf("concurrency results incorrect A2=%#v B3=%#v", final2, final3)
 		}
@@ -423,10 +430,19 @@ func startJobHTTPAgentDockOffline(t *testing.T, binary string, port int, home, d
 
 func startJobHTTPAgentDock(t *testing.T, binary, manifest string, port int, home, defaultDir, logDir, jobsRoot string) *jobHTTPProcess {
 	t.Helper()
+	return startJobHTTPAgentDockWithProfile(t, binary, manifest, port, home, defaultDir, logDir, jobsRoot, filepath.Dir(home))
+}
+
+func startJobHTTPAgentDockHostProfile(t *testing.T, binary, manifest string, port int, home, defaultDir, logDir, jobsRoot string) *jobHTTPProcess {
+	t.Helper()
+	return startJobHTTPAgentDockWithProfile(t, binary, manifest, port, home, defaultDir, logDir, jobsRoot, "")
+}
+
+func startJobHTTPAgentDockWithProfile(t *testing.T, binary, manifest string, port int, home, defaultDir, logDir, jobsRoot, userProfile string) *jobHTTPProcess {
+	t.Helper()
 	cmd := exec.Command(binary, "--host", "127.0.0.1", "--port", strconv.Itoa(port))
 	cmd.Dir = defaultDir
 	cmd.Env = append(os.Environ(),
-		"USERPROFILE="+filepath.Dir(home),
 		"AGENTDOCK_HOME="+home,
 		"AGENTDOCK_DEFAULT_DIR="+defaultDir,
 		"AGENTDOCK_AUTH_TOKEN=",
@@ -437,6 +453,9 @@ func startJobHTTPAgentDock(t *testing.T, binary, manifest string, port int, home
 		"AGENTDOCK_JOB_STORAGE_ROOT="+jobsRoot,
 		"AGENTDOCK_LOG_LEVEL=info",
 	)
+	if strings.TrimSpace(userProfile) != "" {
+		cmd.Env = append(cmd.Env, "USERPROFILE="+userProfile)
+	}
 	stderr := &bytes.Buffer{}
 	cmd.Stdout = io.Discard
 	cmd.Stderr = stderr

@@ -16,23 +16,80 @@ func OutputSchema(name string) map[string]any {
 	objectProp := func(desc string) map[string]any {
 		return map[string]any{"type": "object", "description": desc, "additionalProperties": true}
 	}
+	sessionProp := func() map[string]any {
+		return map[string]any{
+			"type": "object", "additionalProperties": false,
+			"required": []string{"session_id", "project_id", "repo_root", "workspace_type", "isolation_mode", "base_ref", "branch", "worktree", "permission_mode", "runtime_id", "job_ids", "client_tag", "created_at", "last_active_at", "state", "failure_reason", "metadata_version"},
+			"properties": map[string]any{
+				"session_id":       map[string]any{"type": "string", "minLength": 1, "maxLength": 128},
+				"project_id":       map[string]any{"type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$"},
+				"repo_root":        map[string]any{"type": "string", "minLength": 1},
+				"workspace_type":   map[string]any{"type": "string", "enum": []string{"git", "non_git"}},
+				"isolation_mode":   map[string]any{"type": "string", "enum": []string{"worktree", "exclusive", "shared-readonly", "shared-explicit"}},
+				"base_ref":         map[string]any{"type": []string{"string", "null"}, "minLength": 1, "maxLength": 512},
+				"branch":           map[string]any{"type": []string{"string", "null"}, "minLength": 1, "maxLength": 512},
+				"worktree":         map[string]any{"type": []string{"string", "null"}, "minLength": 1},
+				"permission_mode":  map[string]any{"type": "string", "enum": []string{"project", "full"}},
+				"runtime_id":       map[string]any{"type": []string{"string", "null"}, "minLength": 1, "maxLength": 256},
+				"job_ids":          map[string]any{"type": "array", "items": map[string]any{"type": "string", "minLength": 1, "maxLength": 128}, "uniqueItems": true},
+				"client_tag":       map[string]any{"type": []string{"string", "null"}, "minLength": 1, "maxLength": 256},
+				"created_at":       map[string]any{"type": "string", "format": "date-time"},
+				"last_active_at":   map[string]any{"type": "string", "format": "date-time"},
+				"state":            map[string]any{"type": "string", "enum": []string{"OPENING", "ACTIVE", "CLOSING", "CLOSED", "FAILED"}},
+				"failure_reason":   map[string]any{"type": []string{"string", "null"}, "maxLength": 4096},
+				"metadata_version": map[string]any{"type": "string", "const": "D1-v1"},
+			},
+			"allOf": []map[string]any{
+				{
+					"if": map[string]any{"properties": map[string]any{"workspace_type": map[string]any{"const": "git"}}, "required": []string{"workspace_type"}},
+					"then": map[string]any{"properties": map[string]any{
+						"isolation_mode": map[string]any{"const": "worktree"},
+						"base_ref":       map[string]any{"type": "string", "minLength": 1},
+						"branch":         map[string]any{"type": "string", "minLength": 1},
+						"worktree":       map[string]any{"type": "string", "minLength": 1},
+					}},
+				},
+				{
+					"if": map[string]any{"properties": map[string]any{"workspace_type": map[string]any{"const": "non_git"}}, "required": []string{"workspace_type"}},
+					"then": map[string]any{"properties": map[string]any{
+						"isolation_mode": map[string]any{"enum": []string{"exclusive", "shared-readonly", "shared-explicit"}},
+						"base_ref":       map[string]any{"type": "null"},
+						"branch":         map[string]any{"type": "null"},
+						"worktree":       map[string]any{"type": "null"},
+					}},
+				},
+				{
+					"if":   map[string]any{"properties": map[string]any{"state": map[string]any{"const": "FAILED"}}, "required": []string{"state"}},
+					"then": map[string]any{"properties": map[string]any{"failure_reason": map[string]any{"type": "string", "minLength": 1}}},
+					"else": map[string]any{"properties": map[string]any{"failure_reason": map[string]any{"type": "null"}}},
+				},
+			},
+		}
+	}
 
 	switch name {
 	case "opencode_bash", "opencode_read", "opencode_glob", "opencode_grep", "opencode_edit", "opencode_write", "opencode_apply_patch", "opencode_lsp", "opencode_git":
 		props["tool"] = stringProp("Underlying verified OpenCode tool name.")
 		props["workspace"] = stringProp("Canonical workspace bound to the OpenCode runtime.")
 		props["permission_mode"] = stringProp("OpenCode filesystem permission mode used by this runtime.")
+		props["session_id"] = stringProp("D1 session identifier when the call was Session-routed.")
+		props["runtime_scope"] = stringProp("Logical D1 Session runtime scope when Session-routed.")
 		props["runtime"] = objectProp("OpenCode runtime identity, state, PID, health, restart count, and startup metrics.")
 		props["result"] = objectProp("Unmodified MCP tool result returned by the underlying OpenCode runtime.")
 		required = []string{"tool", "workspace", "permission_mode", "runtime", "result"}
 	case "job_start":
 		props["job_id"] = stringProp("Durable persistent job identifier.")
+		props["session_id"] = stringProp("Owning D1 session identifier for Session-owned jobs.")
+		props["workspace"] = stringProp("Canonical workspace bound to the job.")
+		props["runtime_scope"] = stringProp("Logical D1 Session runtime scope for Session-owned jobs.")
 		props["state"] = stringProp("Initial job state.")
 		props["created_at"] = stringProp("UTC creation timestamp.")
 		required = []string{"job_id", "state", "created_at"}
 	case "job_status", "job_cancel":
 		props["job_id"] = stringProp("Durable persistent job identifier.")
+		props["session_id"] = stringProp("Owning D1 session identifier when present.")
 		props["workspace"] = stringProp("Workspace bound to this job.")
+		props["runtime_scope"] = stringProp("Logical D1 Session runtime scope when present.")
 		props["tool"] = stringProp("Underlying verified OpenCode tool.")
 		props["permission_mode"] = stringProp("OpenCode permission mode.")
 		props["state"] = stringProp("Current durable job state.")
@@ -60,6 +117,22 @@ func OutputSchema(name string) map[string]any {
 		props["jobs"] = arrayProp("Bounded persistent job summaries.")
 		props["count"] = intProp("Number of returned jobs.")
 		required = []string{"jobs", "count"}
+	case "session_open", "session_status":
+		props["ok"] = map[string]any{"type": "boolean", "const": true}
+		props["session"] = sessionProp()
+		required = []string{"ok", "session"}
+	case "session_list":
+		props["ok"] = map[string]any{"type": "boolean", "const": true}
+		props["sessions"] = map[string]any{"type": "array", "items": sessionProp()}
+		props["next_cursor"] = map[string]any{"type": []string{"string", "null"}}
+		required = []string{"ok", "sessions", "next_cursor"}
+	case "session_close":
+		props["ok"] = map[string]any{"type": "boolean", "const": true}
+		props["session"] = sessionProp()
+		props["jobs_cancelled"] = map[string]any{"type": "array", "items": map[string]any{"type": "string", "minLength": 1}, "uniqueItems": true}
+		props["branch_preserved"] = map[string]any{"type": "boolean", "const": true}
+		props["worktree_preserved"] = map[string]any{"type": "boolean", "const": true}
+		required = []string{"ok", "session", "jobs_cancelled", "branch_preserved", "worktree_preserved"}
 	case "server_info":
 		props["server"] = stringProp("Server identifier.")
 		props["title"] = stringProp("Human-readable server title.")
@@ -415,5 +488,10 @@ func OutputSchema(name string) map[string]any {
 	case "read_file", "list_dir", "list_files", "search_text", "file_edit":
 		toolfile.AddRuntimeOutputProperties(props)
 	}
-	return map[string]any{"type": "object", "properties": props, "required": required, "additionalProperties": true}
+	additional := true
+	switch name {
+	case "session_open", "session_status", "session_list", "session_close":
+		additional = false
+	}
+	return map[string]any{"type": "object", "properties": props, "required": required, "additionalProperties": additional}
 }

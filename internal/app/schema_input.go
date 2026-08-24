@@ -21,11 +21,13 @@ func InputSchema(name string) map[string]any {
 
 	switch name {
 	case "opencode_bash", "opencode_read", "opencode_glob", "opencode_grep", "opencode_edit", "opencode_write", "opencode_apply_patch", "opencode_lsp", "opencode_git":
+		props["session_id"] = stringProp("Optional D1 session identifier. When present, AgentDock resolves the canonical workspace and permission mode from persisted Session metadata.")
 		props["workspace"] = stringProp("Absolute or relative existing directory bound to this OpenCode runtime. The runtime cannot widen this workspace during a tool call.")
 		props["permission_mode"] = map[string]any{"type": "string", "description": "OpenCode filesystem permission mode. Defaults to project; full must be requested explicitly.", "enum": []string{"project", "full"}}
 		props["arguments"] = objectProp("Arguments forwarded unchanged to the underlying verified OpenCode tool.")
-		required = []string{"workspace", "arguments"}
+		required = []string{"arguments"}
 	case "job_start":
+		props["session_id"] = stringProp("Optional D1 session identifier. Session-owned jobs use the Session canonical workspace and runtime scope.")
 		props["workspace"] = stringProp("Existing workspace for the persistent OpenCode job.")
 		props["tool"] = map[string]any{"type": "string", "description": "Verified OpenCode tool executed by this job.", "enum": []string{"bash", "read", "glob", "grep", "edit", "write", "apply_patch", "lsp", "git"}}
 		props["arguments"] = objectProp("Arguments forwarded unchanged to the underlying OpenCode tool. Persisted summaries are redacted separately.")
@@ -33,23 +35,47 @@ func InputSchema(name string) map[string]any {
 		props["timeout"] = boundedIntProp("Optional job timeout in milliseconds. Timeout cancellation must fully stop the runtime request before TIMED_OUT.", 0, 86400000)
 		props["metadata"] = objectProp("Optional caller metadata. Persisted and displayed metadata is secret-redacted.")
 		props["concurrency_class"] = map[string]any{"type": "string", "enum": []string{"read", "write", "destructive"}, "description": "Optional concurrency classification. Defaults from the selected tool."}
-		required = []string{"workspace", "tool", "arguments"}
+		required = []string{"tool", "arguments"}
 	case "job_status":
+		props["session_id"] = stringProp("Optional D1 session identifier used to enforce job ownership.")
 		props["job_id"] = stringProp("Persistent job identifier returned by job_start.")
 		required = []string{"job_id"}
 	case "job_output":
+		props["session_id"] = stringProp("Optional D1 session identifier used to enforce job ownership.")
 		props["job_id"] = stringProp("Persistent job identifier returned by job_start.")
 		props["cursor"] = map[string]any{"type": "integer", "minimum": 0, "description": "Stable output cursor. Defaults to 0."}
 		props["limit"] = boundedIntProp("Maximum output bytes returned by this request. Defaults to the configured response cap.", 0, 262144)
 		required = []string{"job_id"}
 	case "job_cancel":
+		props["session_id"] = stringProp("Optional D1 session identifier used to enforce job ownership.")
 		props["job_id"] = stringProp("Persistent job identifier returned by job_start.")
 		props["reason"] = stringProp("Optional cancellation reason. Persisted text is secret-redacted.")
 		required = []string{"job_id"}
 	case "job_list":
+		props["session_id"] = stringProp("Optional D1 session identifier. When present, only jobs owned by this Session are returned.")
 		props["state"] = map[string]any{"type": "string", "enum": []string{"QUEUED", "STARTING", "RUNNING", "SUCCEEDED", "FAILED", "CANCEL_REQUESTED", "CANCELLED", "TIMED_OUT", "INTERRUPTED"}}
 		props["workspace"] = stringProp("Optional workspace filter.")
 		props["limit"] = boundedIntProp("Maximum jobs to return. Defaults to 50 and is capped at 200.", 1, 200)
+	case "session_open":
+		props["project_id"] = map[string]any{"type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$", "description": "Stable project identifier."}
+		props["repo_root"] = map[string]any{"type": "string", "minLength": 1, "description": "Existing repository or directory path. AgentDock canonicalizes it before creating Session metadata."}
+		props["base_ref"] = map[string]any{"type": []string{"string", "null"}, "minLength": 1, "maxLength": 512, "default": nil, "description": "Git local branch, tag, or full 40-character commit SHA. Omit for non-Git workspaces."}
+		props["permission_mode"] = map[string]any{"type": "string", "enum": []string{"project", "full"}, "default": "project", "description": "OpenCode permission mode. Defaults to project."}
+		props["client_tag"] = map[string]any{"type": []string{"string", "null"}, "minLength": 1, "maxLength": 256, "default": nil, "description": "Optional caller tag used for Session filtering."}
+		props["isolation_mode"] = map[string]any{"type": []string{"string", "null"}, "enum": []any{"worktree", "exclusive", "shared-readonly", "shared-explicit", nil}, "default": nil, "description": "Isolation policy. Git defaults to worktree; writable non-Git defaults to exclusive."}
+		required = []string{"project_id", "repo_root"}
+	case "session_status":
+		props["session_id"] = map[string]any{"type": "string", "minLength": 1, "maxLength": 128, "description": "Durable D1 session identifier."}
+		required = []string{"session_id"}
+	case "session_list":
+		props["state_filter"] = map[string]any{"type": "string", "enum": []string{"all", "active"}, "default": "all", "description": "Session state filter. Defaults to all."}
+		props["project_id"] = map[string]any{"type": []string{"string", "null"}, "minLength": 1, "maxLength": 128, "default": nil, "description": "Optional project_id filter."}
+		props["client_tag"] = map[string]any{"type": []string{"string", "null"}, "minLength": 1, "maxLength": 256, "default": nil, "description": "Optional client_tag filter."}
+		props["cursor"] = map[string]any{"type": []string{"string", "null"}, "minLength": 1, "maxLength": 1024, "default": nil, "description": "Opaque pagination cursor returned by a prior session_list call."}
+		props["limit"] = map[string]any{"type": "integer", "minimum": 1, "maximum": 200, "default": 100, "description": "Maximum sessions to return. Defaults to 100 and is capped at 200."}
+	case "session_close":
+		props["session_id"] = map[string]any{"type": "string", "minLength": 1, "maxLength": 128, "description": "Durable D1 session identifier."}
+		required = []string{"session_id"}
 	case "read_file":
 		props["path"] = stringProp(toolfile.PathDescription("Host path. Relative paths resolve from ~/AgentDock."))
 		toolfile.AddRuntimeProperties(props)
@@ -430,7 +456,7 @@ func InputSchema(name string) map[string]any {
 		}
 	}
 	switch name {
-	case "opencode_bash", "opencode_read", "opencode_glob", "opencode_grep", "opencode_edit", "opencode_write", "opencode_apply_patch", "opencode_lsp", "opencode_git", "job_start", "job_status", "job_output", "job_cancel", "job_list", "exec_command", "acp_session", "acp_prompt", "acp_interaction", "recall_bootstrap", "recall_search", "recall_read", "recall_write", "recall_maintain", "private_note_manage", "mcp_manage", "mcp_tool_search", "mcp_tool_inspect", "mcp_tool_call", "browser_session", "browser_act", "browser_snapshot":
+	case "opencode_bash", "opencode_read", "opencode_glob", "opencode_grep", "opencode_edit", "opencode_write", "opencode_apply_patch", "opencode_lsp", "opencode_git", "job_start", "job_status", "job_output", "job_cancel", "job_list", "session_open", "session_status", "session_list", "session_close", "exec_command", "acp_session", "acp_prompt", "acp_interaction", "recall_bootstrap", "recall_search", "recall_read", "recall_write", "recall_maintain", "private_note_manage", "mcp_manage", "mcp_tool_search", "mcp_tool_inspect", "mcp_tool_call", "browser_session", "browser_act", "browser_snapshot":
 		// 这些工具的参数契约需要严格收敛，避免删除或拼错的字段被静默忽略。
 		schema["additionalProperties"] = false
 	}

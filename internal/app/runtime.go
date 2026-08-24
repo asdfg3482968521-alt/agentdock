@@ -19,6 +19,7 @@ import (
 	jobruntime "github.com/uvwt/agentdock/internal/job"
 	mcpclient "github.com/uvwt/agentdock/internal/mcp/client"
 	opencoderuntime "github.com/uvwt/agentdock/internal/opencode"
+	sessionruntime "github.com/uvwt/agentdock/internal/session"
 	"github.com/uvwt/agentdock/internal/taskstate"
 	toolacp "github.com/uvwt/agentdock/internal/tool/acp"
 	toolbrowser "github.com/uvwt/agentdock/internal/tool/browser"
@@ -46,6 +47,7 @@ type Runtime struct {
 	dynamicMCP    *toolmcp.Service
 	openCode      *opencoderuntime.Supervisor
 	jobs          *jobruntime.Manager
+	sessions      *sessionruntime.Manager
 	media         *toolmedia.Service
 	browser       *toolbrowser.Service
 	recall        *toolrecall.Service
@@ -88,6 +90,15 @@ func NewRuntime(cfg config.Config) (*Runtime, error) {
 		cfg: cfg, ws: ws, skills: skills,
 		mcpClients: mcpClients, tasks: tasks, commandCtx: commandCtx, commandCancel: commandCancel,
 	}
+	sessionManager, err := sessionruntime.NewManager(context.Background(), sessionruntime.Config{
+		StorageRoot:  filepath.Join(cfg.AgentDockHome, "sessions", "metadata"),
+		WorktreeRoot: filepath.Join(cfg.AgentDockHome, "sessions", "worktrees"),
+	})
+	if err != nil {
+		_ = runtime.Close()
+		return nil, fmt.Errorf("initialize session manager: %w", err)
+	}
+	runtime.sessions = sessionManager
 	if cfg.OpenCodeEnabled {
 		supervisor, err := opencoderuntime.NewSupervisor(context.Background(), opencoderuntime.Options{
 			Locator: opencoderuntime.ManifestLocator{Path: cfg.OpenCodeRuntimeManifest},

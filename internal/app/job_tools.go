@@ -19,10 +19,11 @@ func (r *Runtime) jobStart(_ context.Context, args map[string]any) (Result, erro
 		err.Retryable = true
 		return nil, err
 	}
+	sessionID := strings.TrimSpace(toolcore.StringArg(args, "session_id", ""))
 	workspace := strings.TrimSpace(toolcore.StringArg(args, "workspace", ""))
 	tool := strings.TrimSpace(toolcore.StringArg(args, "tool", ""))
-	if workspace == "" || tool == "" {
-		return nil, toolError("JOB_START_INVALID", "workspace and tool are required", "validation")
+	if tool == "" || (workspace == "" && sessionID == "") {
+		return nil, toolError("JOB_START_INVALID", "tool and either workspace or session_id are required", "validation")
 	}
 	if !isVerifiedOpenCodeTool(tool) {
 		return nil, toolErrorDetails("JOB_TOOL_NOT_ALLOWED", "tool is not part of the verified OpenCode runtime surface", "validation", map[string]any{"tool": tool})
@@ -34,6 +35,19 @@ func (r *Runtime) jobStart(_ context.Context, args map[string]any) (Result, erro
 	permissionMode := strings.ToLower(strings.TrimSpace(toolcore.StringArg(args, "permission_mode", "project")))
 	if permissionMode != "project" && permissionMode != "full" {
 		return nil, toolError("JOB_START_INVALID", "permission_mode must be project or full", "validation")
+	}
+	runtimeScope := ""
+	if sessionID != "" {
+		record, err := r.resolveD1SessionRoute(sessionID, workspace, openCodeToolMutates(tool))
+		if err != nil {
+			return nil, err
+		}
+		workspace = record.Workspace()
+		permissionMode = record.PermissionMode
+		runtimeScope = d1RuntimeScope(sessionID)
+		if _, err := r.sessions.SetRuntime(sessionID, runtimeScope); err != nil {
+			return nil, sessionToolError(err)
+		}
 	}
 	var timeout time.Duration
 	if _, exists := args["timeout"]; exists {
@@ -57,6 +71,7 @@ func (r *Runtime) jobStart(_ context.Context, args map[string]any) (Result, erro
 	}
 	started, err := r.jobs.Start(jobruntime.StartRequest{
 		Workspace: workspace, Tool: tool, Arguments: arguments, PermissionMode: permissionMode,
+		SessionID: sessionID, RuntimeScope: runtimeScope,
 		Timeout: timeout, Metadata: metadata, ConcurrencyClass: class,
 	})
 	if err != nil {
@@ -66,6 +81,13 @@ func (r *Runtime) jobStart(_ context.Context, args map[string]any) (Result, erro
 			return nil, result
 		}
 		return nil, toolErrorCause("JOB_START_FAILED", "failed to start persistent OpenCode job", "job", nil, err)
+	}
+	if sessionID != "" {
+		if _, attachErr := r.sessions.AttachJob(sessionID, started.JobID); attachErr != nil {
+			_, _ = r.jobs.Cancel(context.Background(), started.JobID, "session ownership persistence failed")
+			_, _ = r.sessions.Fail(sessionID, "failed to persist job ownership: "+attachErr.Error())
+			return nil, sessionToolError(attachErr)
+		}
 	}
 	return jobStructResult(started)
 }
@@ -81,6 +103,11 @@ func (r *Runtime) jobStatus(_ context.Context, args map[string]any) (Result, err
 	status, err := r.jobs.Status(jobID)
 	if err != nil {
 		return nil, toolErrorCause("JOB_STATUS_FAILED", "failed to read job status", "job", map[string]any{"job_id": jobID}, err)
+	}
+	if sessionID := strings.TrimSpace(toolcore.StringArg(args, "session_id", "")); sessionID != "" {
+		if err := r.validateJobSessionOwnership(sessionID, status.SessionID); err != nil {
+			return nil, err
+		}
 	}
 	return jobStructResult(status)
 }
@@ -98,6 +125,15 @@ func (r *Runtime) jobOutput(_ context.Context, args map[string]any) (Result, err
 	if cursor < 0 || limit < 0 {
 		return nil, toolError("JOB_OUTPUT_INVALID", "cursor and limit must be non-negative integers", "validation")
 	}
+	if sessionID := strings.TrimSpace(toolcore.StringArg(args, "session_id", "")); sessionID != "" {
+		status, statusErr := r.jobs.Status(jobID)
+		if statusErr != nil {
+			return nil, toolErrorCause("JOB_OUTPUT_FAILED", "failed to read job status before output", "job", map[string]any{"job_id": jobID}, statusErr)
+		}
+		if err := r.validateJobSessionOwnership(sessionID, status.SessionID); err != nil {
+			return nil, err
+		}
+	}
 	output, err := r.jobs.Output(jobruntime.OutputRequest{JobID: jobID, Cursor: int64(cursor), LimitBytes: limit})
 	if err != nil {
 		return nil, toolErrorCause("JOB_OUTPUT_FAILED", "failed to read job output", "job", map[string]any{"job_id": jobID}, err)
@@ -114,6 +150,15 @@ func (r *Runtime) jobCancel(ctx context.Context, args map[string]any) (Result, e
 		return nil, toolError("JOB_ID_REQUIRED", "job_id is required", "validation")
 	}
 	reason := strings.TrimSpace(toolcore.StringArg(args, "reason", "user requested cancellation"))
+	if sessionID := strings.TrimSpace(toolcore.StringArg(args, "session_id", "")); sessionID != "" {
+		status, statusErr := r.jobs.Status(jobID)
+		if statusErr != nil {
+			return nil, toolErrorCause("JOB_CANCEL_FAILED", "failed to read job status before cancellation", "job", map[string]any{"job_id": jobID}, statusErr)
+		}
+		if err := r.validateJobSessionOwnership(sessionID, status.SessionID); err != nil {
+			return nil, err
+		}
+	}
 	status, err := r.jobs.Cancel(ctx, jobID, reason)
 	if err != nil {
 		return nil, toolErrorCause("JOB_CANCEL_FAILED", "failed to cancel persistent job", "job", map[string]any{"job_id": jobID}, err)
@@ -136,7 +181,16 @@ func (r *Runtime) jobList(_ context.Context, args map[string]any) (Result, error
 	if limit <= 0 {
 		return nil, toolError("JOB_LIST_INVALID", "limit must be a positive integer", "validation")
 	}
-	items := r.jobs.List(jobruntime.ListFilter{State: state, Workspace: strings.TrimSpace(toolcore.StringArg(args, "workspace", "")), Limit: limit})
+	workspace := strings.TrimSpace(toolcore.StringArg(args, "workspace", ""))
+	sessionID := strings.TrimSpace(toolcore.StringArg(args, "session_id", ""))
+	if sessionID != "" {
+		record, err := r.resolveD1SessionRoute(sessionID, workspace, false)
+		if err != nil {
+			return nil, err
+		}
+		workspace = record.Workspace()
+	}
+	items := r.jobs.List(jobruntime.ListFilter{State: state, Workspace: workspace, SessionID: sessionID, Limit: limit})
 	return Result{"jobs": items, "count": len(items)}, nil
 }
 
