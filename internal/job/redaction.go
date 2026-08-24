@@ -2,25 +2,14 @@ package job
 
 import (
 	"encoding/json"
-	"regexp"
 	"strings"
 	"unicode/utf8"
+
+	"github.com/uvwt/agentdock/internal/redact"
 )
 
-var secretPatterns = []*regexp.Regexp{
-	regexp.MustCompile(`(?i)("(?:password|passwd|pwd|token|api[_-]?key|secret|credential)"\s*:\s*)("(?:\\.|[^"\\])*"|true|false|null|-?\d+(?:\.\d+)?)`),
-	regexp.MustCompile(`(?i)((?:password|passwd|pwd|token|api[_-]?key|secret|credential)\s*[:=]\s*)("[^"]*"|'[^']*'|[^\s,;]+)`),
-	regexp.MustCompile(`(?i)(authorization\s*:\s*bearer\s+)[^\s]+`),
-	regexp.MustCompile(`(?i)(authorization\s*:\s*basic\s+)[^\s]+`),
-	regexp.MustCompile(`(?i)(https?://[^:\s/@]+:)[^@\s]+@`),
-}
-
 func defaultRedactText(text string) string {
-	text = secretPatterns[0].ReplaceAllString(text, `${1}"[REDACTED]"`)
-	for i := 1; i < len(secretPatterns); i++ {
-		text = secretPatterns[i].ReplaceAllString(text, `${1}[REDACTED]`)
-	}
-	return text
+	return redact.Text(text)
 }
 
 func summarize(value any, maxBytes int, redact func(string) string) string {
