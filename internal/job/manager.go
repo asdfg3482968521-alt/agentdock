@@ -20,6 +20,7 @@ type managedJob struct {
 	output           *outputStore
 	workspaceKey     string
 	progress         map[string]any
+	knownSecrets     [][]byte
 	slotReserved     bool
 	timeoutTriggered bool
 	timer            *time.Timer
@@ -119,6 +120,54 @@ func normalizeConfig(config Config) Config {
 	return config
 }
 
+func cloneKnownSecrets(values [][]byte) [][]byte {
+	cloned := make([][]byte, 0, len(values))
+	for _, value := range values {
+		if len(value) == 0 {
+			continue
+		}
+		copyValue := append([]byte(nil), value...)
+		cloned = append(cloned, copyValue)
+	}
+	return cloned
+}
+
+func zeroKnownSecrets(values [][]byte) {
+	for _, value := range values {
+		for i := range value {
+			value[i] = 0
+		}
+	}
+}
+
+func redactWithKnownSecrets(text string, knownSecrets [][]byte, generic func(string) string) string {
+	for _, secret := range knownSecrets {
+		if len(secret) == 0 {
+			continue
+		}
+		text = strings.ReplaceAll(text, string(secret), "[REDACTED]")
+	}
+	if generic != nil {
+		text = generic(text)
+	}
+	return text
+}
+
+func (m *Manager) redactJobText(job *managedJob, text string) string {
+	if job == nil {
+		return m.config.RedactText(text)
+	}
+	return redactWithKnownSecrets(text, job.knownSecrets, m.config.RedactText)
+}
+
+func (m *Manager) releaseKnownSecretsLocked(job *managedJob) {
+	if job == nil || len(job.knownSecrets) == 0 {
+		return
+	}
+	zeroKnownSecrets(job.knownSecrets)
+	job.knownSecrets = nil
+}
+
 func validateLimits(l Limits) error {
 	if l.MaxConcurrentJobs <= 0 || l.MaxConcurrentPerWorkspace <= 0 || l.MaxConcurrentWritePerWorkspace <= 0 ||
 		l.MemoryOutputBytesPerJob <= 0 || l.MaxOutputBytesPerResponse <= 0 || l.MaxDiskOutputBytesPerJob <= 0 ||
@@ -175,13 +224,23 @@ func (m *Manager) Start(request StartRequest) (StartResult, error) {
 		mode = "project"
 	}
 	args := cloneMap(request.Arguments)
+	knownSecrets := cloneKnownSecrets(request.KnownSecrets)
+	knownSecretsOwned := false
+	defer func() {
+		if !knownSecretsOwned {
+			zeroKnownSecrets(knownSecrets)
+		}
+	}()
+	redactText := func(text string) string {
+		return redactWithKnownSecrets(text, knownSecrets, m.config.RedactText)
+	}
 	record := Record{
 		JobID: jobID, AgentID: strings.TrimSpace(request.AgentID), SessionID: strings.TrimSpace(request.SessionID), Workspace: strings.TrimSpace(request.Workspace), RuntimeScope: strings.TrimSpace(request.RuntimeScope), Tool: strings.TrimSpace(request.Tool), PermissionMode: mode,
-		ArgumentsSummary: summarize(request.Arguments, m.config.Limits.MaxArgumentSummaryBytes, m.config.RedactText),
+		ArgumentsSummary: summarize(request.Arguments, m.config.Limits.MaxArgumentSummaryBytes, redactText),
 		CreatedAt:        created, State: StateQueued, ConcurrencyClass: class,
 	}
 	if request.Metadata != nil {
-		record.MetadataSummary = summarize(request.Metadata, m.config.Limits.MaxMetadataSummaryBytes, m.config.RedactText)
+		record.MetadataSummary = summarize(request.Metadata, m.config.Limits.MaxMetadataSummaryBytes, redactText)
 	}
 	if request.Timeout > 0 {
 		record.TimeoutMillis = request.Timeout.Milliseconds()
@@ -195,7 +254,7 @@ func (m *Manager) Start(request StartRequest) (StartResult, error) {
 		return StartResult{}, err
 	}
 	record.OutputCursor, record.OutputBytes = output.cursorAndBytes()
-	job := &managedJob{record: record, arguments: args, output: output, workspaceKey: workspaceKey(record.Workspace)}
+	job := &managedJob{record: record, arguments: args, output: output, workspaceKey: workspaceKey(record.Workspace), knownSecrets: knownSecrets}
 	if err := m.persistence.save(record); err != nil {
 		return StartResult{}, err
 	}
@@ -207,6 +266,7 @@ func (m *Manager) Start(request StartRequest) (StartResult, error) {
 	}
 	m.jobs[jobID] = job
 	m.queue = append(m.queue, jobID)
+	knownSecretsOwned = true
 	m.mu.Unlock()
 	go m.drain()
 	go func() { _ = m.cleanupRetention() }()
@@ -327,7 +387,7 @@ func (m *Manager) Cancel(ctx context.Context, jobID, reason string) (StatusResul
 		m.mu.Unlock()
 		return status, nil
 	}
-	redactedReason := truncateUTF8(m.config.RedactText(reason), 1024)
+	redactedReason := truncateUTF8(m.redactJobText(job, reason), 1024)
 	if redactedReason == "" {
 		redactedReason = "user requested cancellation"
 	}
@@ -338,6 +398,7 @@ func (m *Manager) Cancel(ctx context.Context, jobID, reason string) (StatusResul
 		now := m.config.Now()
 		job.record.FinishedAt = &now
 		job.arguments = nil
+		m.releaseKnownSecretsLocked(job)
 		status := m.statusLocked(job)
 		m.mu.Unlock()
 		if err := m.persistJob(job); err != nil {
@@ -479,9 +540,9 @@ func (m *Manager) completeJob(job *managedJob, result RuntimeExecutionResult) {
 	exit := result.ExitCode
 	job.record.ExitCode = &exit
 	if result.Summary != "" {
-		job.record.ResultSummary = truncateUTF8(m.config.RedactText(result.Summary), m.config.Limits.MaxResultSummaryBytes)
+		job.record.ResultSummary = truncateUTF8(m.redactJobText(job, result.Summary), m.config.Limits.MaxResultSummaryBytes)
 	} else if result.Result != nil {
-		job.record.ResultSummary = summarize(result.Result, m.config.Limits.MaxResultSummaryBytes, m.config.RedactText)
+		job.record.ResultSummary = summarize(result.Result, m.config.Limits.MaxResultSummaryBytes, func(text string) string { return m.redactJobText(job, text) })
 	}
 	target := StateSucceeded
 	if !result.OK || result.ExitCode != 0 {
@@ -494,6 +555,7 @@ func (m *Manager) completeJob(job *managedJob, result RuntimeExecutionResult) {
 	now := m.config.Now()
 	job.record.FinishedAt = &now
 	job.arguments = nil
+	m.releaseKnownSecretsLocked(job)
 	m.stopTimerLocked(job)
 	released := m.releaseLocked(job)
 	m.mu.Unlock()
@@ -504,7 +566,7 @@ func (m *Manager) completeJob(job *managedJob, result RuntimeExecutionResult) {
 }
 
 func (m *Manager) failJob(job *managedJob, failure error) {
-	_ = m.appendOutput(job, RuntimeOutputEvent{Stream: "stderr", Text: m.config.RedactText(failure.Error()) + "\n"})
+	_ = m.appendOutput(job, RuntimeOutputEvent{Stream: "stderr", Text: failure.Error() + "\n"})
 	m.mu.Lock()
 	if job.record.State == StateCancelRequested {
 		m.mu.Unlock()
@@ -516,10 +578,11 @@ func (m *Manager) failJob(job *managedJob, failure error) {
 		return
 	}
 	_ = transitionRecord(&job.record, StateFailed)
-	job.record.Error = truncateUTF8(m.config.RedactText(failure.Error()), 4096)
+	job.record.Error = truncateUTF8(m.redactJobText(job, failure.Error()), 4096)
 	now := m.config.Now()
 	job.record.FinishedAt = &now
 	job.arguments = nil
+	m.releaseKnownSecretsLocked(job)
 	m.stopTimerLocked(job)
 	released := m.releaseLocked(job)
 	m.mu.Unlock()
@@ -571,7 +634,7 @@ func (m *Manager) startCancellation(job *managedJob) <-chan struct{} {
 		} else {
 			m.mu.Lock()
 			if job.record.State == StateCancelRequested {
-				job.record.Error = truncateUTF8(m.config.RedactText("cancellation failed: "+err.Error()), 4096)
+				job.record.Error = truncateUTF8(m.redactJobText(job, "cancellation failed: "+err.Error()), 4096)
 			}
 			job.cancelErr = err
 			job.cancelStarted = false
@@ -602,6 +665,7 @@ func (m *Manager) finishCancellation(job *managedJob) {
 	now := m.config.Now()
 	job.record.FinishedAt = &now
 	job.arguments = nil
+	m.releaseKnownSecretsLocked(job)
 	m.stopTimerLocked(job)
 	released := m.releaseLocked(job)
 	m.mu.Unlock()
@@ -613,6 +677,7 @@ func (m *Manager) finishCancellation(job *managedJob) {
 }
 
 func (m *Manager) appendOutput(job *managedJob, event RuntimeOutputEvent) error {
+	event.Text = m.redactJobText(job, event.Text)
 	if err := job.output.append(event); err != nil {
 		return err
 	}
@@ -628,7 +693,7 @@ func (m *Manager) setProgress(job *managedJob, metadata map[string]any) {
 	if metadata == nil {
 		return
 	}
-	summary := summarize(metadata, m.config.Limits.MaxMetadataSummaryBytes, m.config.RedactText)
+	summary := summarize(metadata, m.config.Limits.MaxMetadataSummaryBytes, func(text string) string { return m.redactJobText(job, text) })
 	jobProgress := map[string]any{"summary": summary}
 	m.mu.Lock()
 	job.progress = jobProgress

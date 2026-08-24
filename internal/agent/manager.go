@@ -419,6 +419,7 @@ func (m *Manager) runAgent(ctx context.Context, id string) {
 			toolResult, err := m.options.Tools.Execute(ctx, ToolExecutionRequest{
 				AgentID: id, SessionID: record.SessionID, Workspace: record.Workspace, RuntimeScope: record.RuntimeScope,
 				PermissionMode: record.PermissionMode, Tool: call.Name, Arguments: arguments,
+				KnownSecrets: [][]byte{secret},
 			})
 			if err != nil {
 				if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {

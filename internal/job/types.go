@@ -87,6 +87,11 @@ type StartRequest struct {
 	Timeout          time.Duration
 	Metadata         map[string]any
 	ConcurrencyClass ConcurrencyClass
+
+	// KnownSecrets is an internal, non-persisted redaction context for the
+	// lifetime of this Job. Callers must never place these values in Record or
+	// public metadata; Manager clones and zeroes them when the Job terminates.
+	KnownSecrets [][]byte
 }
 
 type StartResult struct {

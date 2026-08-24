@@ -13,6 +13,10 @@ type ToolExecutionRequest struct {
 	PermissionMode string
 	Tool           string
 	Arguments      map[string]any
+
+	// KnownSecrets is strictly internal, ephemeral redaction context. It is
+	// never serialized into Agent/Session/Job metadata or tool arguments.
+	KnownSecrets [][]byte
 }
 
 type ToolExecutionResult struct {

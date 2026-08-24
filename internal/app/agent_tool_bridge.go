@@ -135,7 +135,7 @@ func (b *appAgentToolBridge) Execute(ctx context.Context, request agentruntime.T
 	started, err := b.runtime.jobs.Start(jobruntime.StartRequest{
 		Workspace: fresh.Workspace(), Tool: remoteTool, Arguments: cloneAgentArguments(request.Arguments), PermissionMode: fresh.PermissionMode,
 		SessionID: fresh.SessionID, AgentID: request.AgentID, RuntimeScope: d1RuntimeScope(fresh.SessionID), ConcurrencyClass: classifyOpenCodeJob(remoteTool),
-		Metadata: map[string]any{"agent_id": request.AgentID},
+		Metadata: map[string]any{"agent_id": request.AgentID}, KnownSecrets: request.KnownSecrets,
 	})
 	if err != nil {
 		return agentruntime.ToolExecutionResult{}, fmt.Errorf("%w: start Agent-owned job", agentruntime.ErrToolError)
