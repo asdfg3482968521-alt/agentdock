@@ -1117,7 +1117,7 @@ func TestDesktopTrayMenusUseNativeDismissalAndOmitCopyActions(t *testing.T) {
 		`"打开日志目录"`,
 		`"打开配置目录"`,
 		`"打开使用文档"`,
-		`"退出菜单栏"`,
+		`"退出 AgentDock"`,
 	}
 	lastIndex := -1
 	for _, item := range orderedItems {
