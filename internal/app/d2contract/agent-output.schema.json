@@ -1,0 +1,32 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://gpt-taskboard.local/acceptance/schemas/agent-output.schema.json",
+  "title": "agent_output input",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["session_id", "agent_id"],
+  "properties": {
+    "session_id": {"type": "string", "minLength": 1, "maxLength": 256},
+    "agent_id": {"type": "string", "minLength": 1, "maxLength": 256},
+    "cursor": {"type": "integer", "minimum": 0, "default": 0},
+    "limit": {"type": "integer", "minimum": 1, "maximum": 262144, "default": 65536}
+  },
+  "x-success-output": {
+    "type": "object",
+    "additionalProperties": false,
+    "required": ["ok", "agent_id", "session_id", "cursor", "next_cursor", "output", "has_more"],
+    "properties": {
+      "ok": {"const": true},
+      "agent_id": {"type": "string"},
+      "session_id": {"type": "string"},
+      "cursor": {"type": "integer", "minimum": 0},
+      "next_cursor": {"type": "integer", "minimum": 0},
+      "output": {"type": "string"},
+      "has_more": {"type": "boolean"}
+    }
+  },
+  "x-output-rule": "bounded incremental secret-redacted output only; never return an unbounded transcript",
+  "x-secret-redacted": true,
+  "x-errors": ["AGENT_NOT_FOUND", "AGENT_SESSION_OWNERSHIP_MISMATCH", "AGENT_SESSION_CLOSED", "INVALID_ARGUMENTS"],
+  "x-contract-version": "D2-v1"
+}

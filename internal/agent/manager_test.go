@@ -30,6 +30,16 @@ type fakeCredentialResolver struct {
 	secret credential.Secret
 }
 
+type countingCredentialResolver struct {
+	calls  *atomic.Int32
+	secret credential.Secret
+}
+
+func (c countingCredentialResolver) Resolve(ctx context.Context, ref string) (credential.Secret, error) {
+	c.calls.Add(1)
+	return credential.CloneSecret(c.secret), nil
+}
+
 func (f fakeCredentialResolver) Resolve(ctx context.Context, ref string) (credential.Secret, error) {
 	if ref == "" {
 		return nil, credential.ErrInvalidRef
@@ -341,6 +351,48 @@ func TestAgentManagerRestartReconcilesNonTerminalWithoutReplay(t *testing.T) {
 	}
 	if got.State != AgentStateInterrupted {
 		t.Fatalf("recovered state=%s", got.State)
+	}
+}
+
+func TestAgentStartingCancelCannotTransitionBackToRunning(t *testing.T) {
+	providerCalls := atomic.Int32{}
+	provider := ProviderAdapterFunc(func(context.Context, ProviderRequest, func(ProviderEvent) error) (ProviderResult, error) {
+		providerCalls.Add(1)
+		return ProviderResult{}, nil
+	})
+	manager := testAgentManager(t, provider, DefaultAgentLimits())
+	defer manager.Close()
+	credentialCalls := atomic.Int32{}
+	manager.options.Credentials = countingCredentialResolver{calls: &credentialCalls, secret: credential.Secret("synthetic")}
+	now := time.Now().UTC()
+	ctx, cancel := context.WithCancel(manager.rootCtx)
+	cancel()
+	managed := &managedAgent{
+		record:  Record{AgentID: "agent_starting_cancel", SessionID: "session_a", Workspace: "x", RuntimeScope: "scope-a", PermissionMode: "project", Provider: "fake", Model: "fake-model", ResolvedModel: "fake-model", Role: "implementation", CredentialRef: "cred_fake_default", TimeoutMS: 1000, Budget: AgentBudget{MaxRequests: 1}, MaxRequests: 1, State: AgentStateCancelRequested, CreatedAt: now, StartedAt: &now, UpdatedAt: now},
+		request: &StartRequest{SessionID: "session_a", Provider: "fake", Model: "fake-model", CredentialRef: "cred_fake_default", Role: "implementation", Prompt: "must not run", PermissionMode: "project", MaxRequests: 1, Timeout: time.Second},
+		cancel:  cancel,
+		done:    make(chan struct{}),
+	}
+	manager.mu.Lock()
+	manager.agents[managed.record.AgentID] = managed
+	manager.activeGlobal++
+	manager.activeProvider["fake"]++
+	manager.activeSession["session_a"]++
+	manager.mu.Unlock()
+
+	manager.runAgent(ctx, managed.record.AgentID)
+	got, err := manager.Get("session_a", managed.record.AgentID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.State != AgentStateCancelled {
+		t.Fatalf("starting cancel transitioned to %s", got.State)
+	}
+	if credentialCalls.Load() != 0 {
+		t.Fatalf("credential resolved after STARTING cancel: calls=%d", credentialCalls.Load())
+	}
+	if providerCalls.Load() != 0 {
+		t.Fatalf("provider ran after STARTING cancel: calls=%d", providerCalls.Load())
 	}
 }
 

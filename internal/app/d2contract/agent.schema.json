@@ -1,0 +1,75 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://gpt-taskboard.local/acceptance/schemas/agent.schema.json",
+  "title": "GPT-TaskBoard D2 Agent Resource",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "agent_id",
+    "session_id",
+    "provider",
+    "model",
+    "role",
+    "credential_ref",
+    "permission",
+    "timeout_ms",
+    "budget",
+    "state",
+    "created_at",
+    "started_at",
+    "finished_at",
+    "failure_reason",
+    "runtime_scope",
+    "output_cursor",
+    "usage"
+  ],
+  "properties": {
+    "agent_id": {"type": "string", "minLength": 1, "maxLength": 256},
+    "session_id": {"type": "string", "minLength": 1, "maxLength": 256},
+    "provider": {"type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-z0-9][a-z0-9._-]*$"},
+    "model": {"type": "string", "minLength": 1, "maxLength": 256, "not": {"const": "default"}},
+    "role": {"type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$"},
+    "credential_ref": {"$ref": "credential-ref.schema.json"},
+    "permission": {"$ref": "agent-permission.schema.json"},
+    "timeout_ms": {"type": "integer", "minimum": 1, "maximum": 86400000},
+    "budget": {"$ref": "agent-budget.schema.json"},
+    "state": {"enum": ["QUEUED", "STARTING", "RUNNING", "CANCEL_REQUESTED", "SUCCEEDED", "FAILED", "CANCELLED", "TIMED_OUT", "INTERRUPTED"]},
+    "created_at": {"type": "string", "format": "date-time"},
+    "started_at": {"type": ["string", "null"], "format": "date-time"},
+    "finished_at": {"type": ["string", "null"], "format": "date-time"},
+    "failure_reason": {"anyOf": [{"$ref": "agent-error.schema.json"}, {"type": "null"}]},
+    "runtime_scope": {"type": "string", "minLength": 1, "maxLength": 512},
+    "output_cursor": {"type": "integer", "minimum": 0},
+    "usage": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["requests", "input_tokens", "output_tokens"],
+      "properties": {
+        "requests": {"type": "integer", "minimum": 0},
+        "input_tokens": {"type": ["integer", "null"], "minimum": 0},
+        "output_tokens": {"type": ["integer", "null"], "minimum": 0}
+      }
+    }
+  },
+  "x-terminal-states": ["SUCCEEDED", "FAILED", "CANCELLED", "TIMED_OUT", "INTERRUPTED"],
+  "x-allowed-transitions": {
+    "QUEUED": ["STARTING", "CANCEL_REQUESTED"],
+    "STARTING": ["RUNNING", "CANCEL_REQUESTED", "FAILED", "TIMED_OUT", "INTERRUPTED"],
+    "RUNNING": ["CANCEL_REQUESTED", "SUCCEEDED", "FAILED", "TIMED_OUT", "INTERRUPTED"],
+    "CANCEL_REQUESTED": ["CANCELLED", "FAILED", "INTERRUPTED"],
+    "SUCCEEDED": [],
+    "FAILED": [],
+    "CANCELLED": [],
+    "TIMED_OUT": [],
+    "INTERRUPTED": []
+  },
+  "x-restart-reconciliation": {
+    "QUEUED": "QUEUED",
+    "STARTING": "INTERRUPTED",
+    "RUNNING": "INTERRUPTED",
+    "CANCEL_REQUESTED": "INTERRUPTED",
+    "terminal": "unchanged"
+  },
+  "x-secret-values-forbidden": true,
+  "x-contract-version": "D2-v1"
+}

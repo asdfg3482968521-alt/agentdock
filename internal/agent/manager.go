@@ -3,7 +3,9 @@ package agent
 import (
 	"context"
 	"crypto/rand"
+	"encoding/base64"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -323,6 +325,16 @@ func (m *Manager) runAgent(ctx context.Context, id string) {
 		return
 	}
 	if m.crashed {
+		m.releaseRunLocked(managed)
+		m.mu.Unlock()
+		return
+	}
+	if managed.record.State == AgentStateCancelRequested {
+		m.mu.Unlock()
+		m.finishAgent(id, AgentStateCancelled, ProviderResult{}, context.Canceled, nil)
+		return
+	}
+	if managed.record.State != AgentStateStarting {
 		m.releaseRunLocked(managed)
 		m.mu.Unlock()
 		return
@@ -655,6 +667,11 @@ func (m *Manager) Cancel(ctx context.Context, sessionID, agentID, reason string)
 		m.mu.Unlock()
 		return result, nil
 	}
+	if managed.record.State == AgentStateCancelRequested {
+		result := cloneAgentRecord(managed.record)
+		m.mu.Unlock()
+		return result, nil
+	}
 	if managed.record.State == AgentStateQueued {
 		m.removeQueuedLocked(managed.record.AgentID)
 		now := m.options.Now().UTC()
@@ -753,8 +770,55 @@ func (m *Manager) Result(sessionID, agentID string) (Result, error) {
 }
 
 func (m *Manager) List(filter ListFilter) []Record {
+	page, err := m.ListPage(filter)
+	if err != nil {
+		return nil
+	}
+	return page.Records
+}
+
+type agentListCursor struct {
+	Version   int        `json:"v"`
+	SessionID string     `json:"s"`
+	State     AgentState `json:"t,omitempty"`
+	Provider  string     `json:"p,omitempty"`
+	CreatedAt string     `json:"c"`
+	AgentID   string     `json:"a"`
+}
+
+func (m *Manager) ListPage(filter ListFilter) (ListPage, error) {
+	filter.SessionID = strings.TrimSpace(filter.SessionID)
+	filter.Provider = strings.TrimSpace(filter.Provider)
+	filter.Cursor = strings.TrimSpace(filter.Cursor)
+	limit := filter.Limit
+	if limit <= 0 {
+		limit = 100
+	}
+	if limit > 200 {
+		return ListPage{}, ErrInvalidArguments
+	}
+	var cursorTime time.Time
+	var cursorID string
+	if filter.Cursor != "" {
+		decoded, err := base64.RawURLEncoding.DecodeString(filter.Cursor)
+		if err != nil || len(decoded) == 0 || len(decoded) > 2048 {
+			return ListPage{}, ErrInvalidArguments
+		}
+		var cursor agentListCursor
+		if err := json.Unmarshal(decoded, &cursor); err != nil || cursor.Version != 1 || strings.TrimSpace(cursor.AgentID) == "" {
+			return ListPage{}, ErrInvalidArguments
+		}
+		if cursor.SessionID != filter.SessionID || cursor.State != filter.State || cursor.Provider != filter.Provider {
+			return ListPage{}, ErrInvalidArguments
+		}
+		parsed, err := time.Parse(time.RFC3339Nano, cursor.CreatedAt)
+		if err != nil {
+			return ListPage{}, ErrInvalidArguments
+		}
+		cursorTime, cursorID = parsed.UTC(), cursor.AgentID
+	}
+
 	m.mu.Lock()
-	defer m.mu.Unlock()
 	items := make([]Record, 0)
 	for _, managed := range m.agents {
 		if filter.SessionID != "" && managed.record.SessionID != filter.SessionID {
@@ -763,22 +827,45 @@ func (m *Manager) List(filter ListFilter) []Record {
 		if filter.State != "" && managed.record.State != filter.State {
 			continue
 		}
+		if filter.Provider != "" && managed.record.Provider != filter.Provider {
+			continue
+		}
 		items = append(items, cloneAgentRecord(managed.record))
 	}
+	m.mu.Unlock()
 	sort.Slice(items, func(i, j int) bool {
 		if items[i].CreatedAt.Equal(items[j].CreatedAt) {
 			return items[i].AgentID < items[j].AgentID
 		}
 		return items[i].CreatedAt.Before(items[j].CreatedAt)
 	})
-	limit := filter.Limit
-	if limit <= 0 || limit > 200 {
-		limit = 200
+	if !cursorTime.IsZero() {
+		start := 0
+		for start < len(items) {
+			item := items[start]
+			if item.CreatedAt.After(cursorTime) || (item.CreatedAt.Equal(cursorTime) && item.AgentID > cursorID) {
+				break
+			}
+			start++
+		}
+		items = items[start:]
 	}
-	if len(items) > limit {
-		items = items[:limit]
+	page := ListPage{}
+	if len(items) <= limit {
+		page.Records = items
+		return page, nil
 	}
-	return items
+	page.Records = items[:limit]
+	last := page.Records[len(page.Records)-1]
+	encoded, err := json.Marshal(agentListCursor{
+		Version: 1, SessionID: filter.SessionID, State: filter.State, Provider: filter.Provider,
+		CreatedAt: last.CreatedAt.UTC().Format(time.RFC3339Nano), AgentID: last.AgentID,
+	})
+	if err != nil {
+		return ListPage{}, err
+	}
+	page.NextCursor = base64.RawURLEncoding.EncodeToString(encoded)
+	return page, nil
 }
 
 func (m *Manager) recover() error {

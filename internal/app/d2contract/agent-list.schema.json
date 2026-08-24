@@ -1,0 +1,29 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://gpt-taskboard.local/acceptance/schemas/agent-list.schema.json",
+  "title": "agent_list input",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["session_id"],
+  "properties": {
+    "session_id": {"type": "string", "minLength": 1, "maxLength": 256},
+    "state": {"type": ["string", "null"], "enum": ["QUEUED", "STARTING", "RUNNING", "CANCEL_REQUESTED", "SUCCEEDED", "FAILED", "CANCELLED", "TIMED_OUT", "INTERRUPTED", null], "default": null},
+    "provider": {"type": ["string", "null"], "minLength": 1, "maxLength": 128, "default": null},
+    "limit": {"type": "integer", "minimum": 1, "maximum": 200, "default": 100},
+    "cursor": {"type": ["string", "null"], "minLength": 1, "maxLength": 1024, "default": null}
+  },
+  "x-success-output": {
+    "type": "object",
+    "additionalProperties": false,
+    "required": ["ok", "agents", "next_cursor"],
+    "properties": {
+      "ok": {"const": true},
+      "agents": {"type": "array", "items": {"$ref": "agent.schema.json"}},
+      "next_cursor": {"type": ["string", "null"]}
+    }
+  },
+  "x-ownership-rule": "every returned Agent must belong to input session_id",
+  "x-supported-filters": ["session_id", "state", "provider", "limit", "cursor"],
+  "x-errors": ["AGENT_SESSION_CLOSED", "INVALID_ARGUMENTS"],
+  "x-contract-version": "D2-v1"
+}

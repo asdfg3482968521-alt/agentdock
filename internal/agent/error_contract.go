@@ -42,6 +42,8 @@ func AgentErrorFrom(err error, secret []byte) ErrorEnvelope {
 		code = "CREDENTIAL_NOT_FOUND"
 	case errors.Is(err, ErrProviderUnsupported):
 		code = "PROVIDER_UNSUPPORTED"
+	case errors.Is(err, ErrModelUnavailable):
+		code = "MODEL_UNAVAILABLE"
 	case errors.Is(err, ErrBudgetExceeded):
 		code = "BUDGET_EXCEEDED"
 	case errors.Is(err, ErrResourceLimit):

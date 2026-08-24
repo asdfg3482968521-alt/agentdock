@@ -264,6 +264,7 @@ func TestAgentErrorEnvelopeMapsFrozenCodesAndRedactsSecrets(t *testing.T) {
 		{"credential_ref", credential.ErrInvalidRef, "INVALID_CREDENTIAL_REF"},
 		{"credential_missing", credential.ErrNotFound, "CREDENTIAL_NOT_FOUND"},
 		{"provider", ErrProviderUnsupported, "PROVIDER_UNSUPPORTED"},
+		{"model_sentinel", ErrModelUnavailable, "MODEL_UNAVAILABLE"},
 		{"model", &providerError{code: ProviderErrorModelUnavailable, err: errors.New("unavailable")}, "MODEL_UNAVAILABLE"},
 		{"auth", &providerError{code: ProviderErrorAuthFailure, err: fmt.Errorf("bad %s", secret)}, "AUTH_FAILURE"},
 		{"rate", &providerError{code: ProviderErrorRateLimited, err: errors.New("rate")}, "RATE_LIMITED"},

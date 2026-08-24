@@ -1,0 +1,33 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://gpt-taskboard.local/acceptance/schemas/agent-start.schema.json",
+  "title": "agent_start input",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["session_id", "provider", "role", "credential_ref", "prompt", "permission", "timeout_ms", "budget"],
+  "properties": {
+    "session_id": {"type": "string", "minLength": 1, "maxLength": 256},
+    "provider": {"type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-z0-9][a-z0-9._-]*$"},
+    "model": {"type": ["string", "null"], "minLength": 1, "maxLength": 256, "default": null, "description": "When null/omitted, provider must have one deterministic configured default which is resolved and persisted before execution."},
+    "role": {"type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$"},
+    "credential_ref": {"$ref": "credential-ref.schema.json"},
+    "prompt": {"type": "string", "minLength": 1, "maxLength": 200000},
+    "permission": {"$ref": "agent-permission.schema.json"},
+    "timeout_ms": {"type": "integer", "minimum": 1, "maximum": 86400000},
+    "budget": {"$ref": "agent-budget.schema.json"}
+  },
+  "x-success-output": {
+    "type": "object",
+    "additionalProperties": false,
+    "required": ["ok", "agent"],
+    "properties": {
+      "ok": {"const": true},
+      "agent": {"$ref": "agent.schema.json"}
+    },
+    "accepted_states": ["QUEUED", "STARTING", "RUNNING"]
+  },
+  "x-forbidden-plaintext-secret-properties": ["api_key", "access_token", "secret", "authorization", "password"],
+  "x-forbidden-routing-overrides": ["workspace", "runtime_scope", "permission_mode"],
+  "x-errors": ["AGENT_SESSION_CLOSED", "INVALID_CREDENTIAL_REF", "CREDENTIAL_NOT_FOUND", "PROVIDER_UNSUPPORTED", "MODEL_UNAVAILABLE", "AGENT_WRITE_DENIED", "RESOURCE_LIMIT", "INVALID_ARGUMENTS"],
+  "x-contract-version": "D2-v1"
+}

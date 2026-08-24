@@ -1,0 +1,32 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://gpt-taskboard.local/acceptance/schemas/agent-cancel.schema.json",
+  "title": "agent_cancel input",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["session_id", "agent_id"],
+  "properties": {
+    "session_id": {"type": "string", "minLength": 1, "maxLength": 256},
+    "agent_id": {"type": "string", "minLength": 1, "maxLength": 256},
+    "reason": {"type": ["string", "null"], "maxLength": 1024, "default": null, "description": "Persisted/returned form must be secret-redacted."}
+  },
+  "x-success-output": {
+    "type": "object",
+    "additionalProperties": false,
+    "required": ["ok", "agent_id", "session_id", "state", "already_terminal"],
+    "properties": {
+      "ok": {"const": true},
+      "agent_id": {"type": "string"},
+      "session_id": {"type": "string"},
+      "state": {"enum": ["CANCEL_REQUESTED", "SUCCEEDED", "FAILED", "CANCELLED", "TIMED_OUT", "INTERRUPTED"]},
+      "already_terminal": {"type": "boolean"}
+    }
+  },
+  "x-idempotency": {
+    "duplicate_cancel_requested": "return same CANCEL_REQUESTED summary",
+    "already_terminal": "return unchanged terminal state with already_terminal=true",
+    "starting_cancel": "must not later transition to RUNNING"
+  },
+  "x-errors": ["AGENT_NOT_FOUND", "AGENT_SESSION_OWNERSHIP_MISMATCH", "AGENT_SESSION_CLOSED"],
+  "x-contract-version": "D2-v1"
+}

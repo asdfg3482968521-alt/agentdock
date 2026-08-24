@@ -1,0 +1,46 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://gpt-taskboard.local/acceptance/schemas/agent-error.schema.json",
+  "title": "D2 Agent error envelope",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["code", "message", "retryable"],
+  "properties": {
+    "code": {
+      "enum": [
+        "AGENT_NOT_FOUND",
+        "AGENT_SESSION_OWNERSHIP_MISMATCH",
+        "AGENT_SESSION_CLOSED",
+        "AGENT_WRITE_DENIED",
+        "AGENT_NOT_TERMINAL",
+        "INVALID_AGENT_TRANSITION",
+        "INVALID_ARGUMENTS",
+        "INVALID_CREDENTIAL_REF",
+        "CREDENTIAL_NOT_FOUND",
+        "PROVIDER_UNSUPPORTED",
+        "MODEL_UNAVAILABLE",
+        "AUTH_FAILURE",
+        "RATE_LIMITED",
+        "BAD_REQUEST",
+        "PROVIDER_UNAVAILABLE",
+        "TIMEOUT",
+        "CANCELLED",
+        "MALFORMED_RESPONSE",
+        "TOOL_ERROR",
+        "BUDGET_EXCEEDED",
+        "RESOURCE_LIMIT"
+      ]
+    },
+    "message": {"type": "string", "minLength": 1, "maxLength": 2048},
+    "retryable": {"type": "boolean"},
+    "provider_code": {"type": ["string", "null"], "maxLength": 256, "default": null},
+    "details": {
+      "type": ["object", "null"],
+      "additionalProperties": {"type": ["string", "number", "integer", "boolean", "null"]},
+      "default": null,
+      "description": "Bounded sanitized metadata only; never raw request/response bodies, authorization headers, or credential values."
+    }
+  },
+  "x-secret-redacted": true,
+  "x-contract-version": "D2-v1"
+}

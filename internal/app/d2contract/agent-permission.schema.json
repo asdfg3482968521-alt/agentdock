@@ -1,0 +1,10 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://gpt-taskboard.local/acceptance/schemas/agent-permission.schema.json",
+  "title": "D2 Agent permission",
+  "type": "string",
+  "enum": ["read-only", "project"],
+  "description": "Agent permission can narrow but never widen Session effective permission. Agent-requested full is forbidden in D2-v1.",
+  "x-read-only-tools": ["opencode_read", "opencode_glob", "opencode_grep", "opencode_lsp"],
+  "x-contract-version": "D2-v1"
+}

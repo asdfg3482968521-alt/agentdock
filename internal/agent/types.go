@@ -40,6 +40,7 @@ var (
 	ErrInvalidAgentTransition        = errors.New("invalid agent transition")
 	ErrInvalidArguments              = errors.New("invalid arguments")
 	ErrProviderUnsupported           = errors.New("provider unsupported")
+	ErrModelUnavailable              = errors.New("model unavailable")
 	ErrBudgetExceeded                = errors.New("budget exceeded")
 	ErrResourceLimit                 = errors.New("resource limit")
 	ErrToolError                     = errors.New("tool error")
@@ -193,5 +194,12 @@ type Result struct {
 type ListFilter struct {
 	SessionID string
 	State     AgentState
+	Provider  string
 	Limit     int
+	Cursor    string
+}
+
+type ListPage struct {
+	Records    []Record
+	NextCursor string
 }

@@ -1,0 +1,18 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://gpt-taskboard.local/acceptance/schemas/agent-budget.schema.json",
+  "title": "D2 Agent budget",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["max_requests"],
+  "properties": {
+    "max_requests": {
+      "type": "integer",
+      "minimum": 1,
+      "description": "Maximum provider requests this Agent may issue. The next request that would exceed this ceiling is not sent and the Agent terminates with BUDGET_EXCEEDED."
+    }
+  },
+  "x-cost-budget": "not-defined-in-D2-v1",
+  "x-token-budget": "not-enforced-in-D2-v1",
+  "x-contract-version": "D2-v1"
+}

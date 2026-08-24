@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -39,30 +40,31 @@ import (
 type Result = toolcore.Result
 
 type Runtime struct {
-	cfg           config.Config
-	ws            *workspace.Workspace
-	skills        *toolskill.Service
-	mcpClients    *mcpclient.Manager
-	tasks         *taskstate.Store
-	command       *toolcommand.Service
-	files         *toolfile.Service
-	dynamicMCP    *toolmcp.Service
-	openCode      *opencoderuntime.Supervisor
-	jobs          *jobruntime.Manager
-	sessions      *sessionruntime.Manager
-	agents        *agentruntime.Manager
-	media         *toolmedia.Service
-	browser       *toolbrowser.Service
-	recall        *toolrecall.Service
-	evolution     *evolution.Service
-	taskTools     *tooltask.Service
-	acp           *toolacp.Service
-	lifecycleMu   sync.RWMutex
-	commandCtx    context.Context
-	commandCancel context.CancelFunc
-	closing       bool
-	closeOnce     sync.Once
-	closeErr      error
+	cfg             config.Config
+	ws              *workspace.Workspace
+	skills          *toolskill.Service
+	mcpClients      *mcpclient.Manager
+	tasks           *taskstate.Store
+	command         *toolcommand.Service
+	files           *toolfile.Service
+	dynamicMCP      *toolmcp.Service
+	openCode        *opencoderuntime.Supervisor
+	jobs            *jobruntime.Manager
+	sessions        *sessionruntime.Manager
+	agents          *agentruntime.Manager
+	credentialStore *credential.Store
+	media           *toolmedia.Service
+	browser         *toolbrowser.Service
+	recall          *toolrecall.Service
+	evolution       *evolution.Service
+	taskTools       *tooltask.Service
+	acp             *toolacp.Service
+	lifecycleMu     sync.RWMutex
+	commandCtx      context.Context
+	commandCancel   context.CancelFunc
+	closing         bool
+	closeOnce       sync.Once
+	closeErr        error
 }
 
 func NewRuntime(cfg config.Config) (*Runtime, error) {
@@ -131,6 +133,7 @@ func NewRuntime(cfg config.Config) (*Runtime, error) {
 		_ = runtime.Close()
 		return nil, fmt.Errorf("initialize credential store: %w", err)
 	}
+	runtime.credentialStore = credentialStore
 	agentManager, err := agentruntime.NewManager(context.Background(), agentruntime.ManagerOptions{
 		StorageRoot: filepath.Join(cfg.AgentDockHome, "agents"),
 		Sessions:    newAgentSessionResolver(runtime),
@@ -321,8 +324,12 @@ func validateTopLevelArguments(spec ToolSpec, args map[string]any) error {
 		return nil
 	}
 	sort.Strings(unknown)
+	code := "INVALID_ARGUMENT"
+	if strings.HasPrefix(spec.Name, "agent_") {
+		code = "INVALID_ARGUMENTS"
+	}
 	return toolErrorDetails(
-		"INVALID_ARGUMENT",
+		code,
 		"unknown tool arguments",
 		"validation",
 		map[string]any{"tool": spec.Name, "fields": unknown},
