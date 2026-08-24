@@ -35,6 +35,7 @@ var (
 	ErrAgentNotFound                 = errors.New("agent not found")
 	ErrAgentSessionOwnershipMismatch = errors.New("agent session ownership mismatch")
 	ErrAgentSessionClosed            = errors.New("agent session closed")
+	ErrAgentWriteDenied              = errors.New("agent write denied")
 	ErrAgentNotTerminal              = errors.New("agent not terminal")
 	ErrInvalidAgentTransition        = errors.New("invalid agent transition")
 	ErrInvalidArguments              = errors.New("invalid arguments")
@@ -87,14 +88,15 @@ type ManagerOptions struct {
 }
 
 type StartRequest struct {
-	SessionID     string
-	Provider      string
-	Model         string
-	CredentialRef string
-	Role          string
-	Prompt        string
-	MaxRequests   int
-	Timeout       time.Duration
+	SessionID      string
+	Provider       string
+	Model          string
+	CredentialRef  string
+	Role           string
+	Prompt         string
+	PermissionMode string
+	MaxRequests    int
+	Timeout        time.Duration
 }
 
 type Record struct {

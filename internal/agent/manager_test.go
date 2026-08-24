@@ -86,6 +86,43 @@ func testAgentManager(t *testing.T, provider ProviderAdapter, limits AgentLimits
 	return manager
 }
 
+func TestAgentManagerRequestedPermissionCannotExceedSession(t *testing.T) {
+	root := t.TempDir()
+	resolver := fakeSessionResolver{bindings: map[string]SessionBinding{
+		"session_ro": {SessionID: "session_ro", Workspace: filepath.Join(root, "ro"), RuntimeScope: "scope-ro", PermissionMode: "read-only"},
+		"session_rw": {SessionID: "session_rw", Workspace: filepath.Join(root, "rw"), RuntimeScope: "scope-rw", PermissionMode: "project"},
+	}}
+	manager, err := NewManager(context.Background(), ManagerOptions{
+		StorageRoot: filepath.Join(root, "agents"), Sessions: resolver,
+		Credentials: fakeCredentialResolver{secret: credential.Secret("synthetic")},
+		Providers:   map[string]ProviderAdapter{"fake": &scriptedProvider{}},
+		Limits:      DefaultAgentLimits(), IDFactory: func() string { return "agent_permission" },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer manager.Close()
+	base := StartRequest{Provider: "fake", CredentialRef: "cred_permission_test", Prompt: "x", MaxRequests: 1}
+	request := base
+	request.SessionID = "session_ro"
+	request.PermissionMode = "project"
+	if _, err := manager.Start(context.Background(), request); !errors.Is(err, ErrAgentWriteDenied) {
+		t.Fatalf("project agent in read-only session error=%v", err)
+	}
+	request.PermissionMode = "read-only"
+	if record, err := manager.Start(context.Background(), request); err != nil || record.PermissionMode != "read-only" {
+		t.Fatalf("read-only start record=%+v err=%v", record, err)
+	}
+	request = base
+	request.SessionID = "session_rw"
+	request.PermissionMode = "read-only"
+	request.MaxRequests = 1
+	manager.options.IDFactory = func() string { return "agent_permission_rw" }
+	if record, err := manager.Start(context.Background(), request); err != nil || record.PermissionMode != "read-only" {
+		t.Fatalf("explicit downgrade record=%+v err=%v", record, err)
+	}
+}
+
 func TestAgentManagerRequiresCanonicalSessionBinding(t *testing.T) {
 	provider := &blockingProvider{release: make(chan struct{})}
 	manager := testAgentManager(t, provider, DefaultAgentLimits())

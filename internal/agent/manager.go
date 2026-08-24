@@ -129,10 +129,21 @@ func (m *Manager) Start(ctx context.Context, request StartRequest) (Record, erro
 	if binding.SessionID != request.SessionID || strings.TrimSpace(binding.Workspace) == "" {
 		return Record{}, ErrAgentSessionClosed
 	}
-	permission, err := normalizeAgentPermission(binding.PermissionMode)
+	sessionPermission, err := normalizeAgentPermission(binding.PermissionMode)
 	if err != nil {
 		return Record{}, err
 	}
+	permission := strings.ToLower(strings.TrimSpace(request.PermissionMode))
+	if permission == "" {
+		permission = sessionPermission
+	}
+	if permission != "read-only" && permission != "project" {
+		return Record{}, fmt.Errorf("%w: permission must be read-only or project", ErrInvalidArguments)
+	}
+	if permission == "project" && sessionPermission != "project" {
+		return Record{}, ErrAgentWriteDenied
+	}
+	request.PermissionMode = permission
 
 	m.mu.Lock()
 	if m.closed || m.crashed {
