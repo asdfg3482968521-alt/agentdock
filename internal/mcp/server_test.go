@@ -2,10 +2,13 @@ package mcp
 
 import (
 	"context"
+	"encoding/json"
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -142,6 +145,72 @@ func TestOfficialSDKServerListsAndCallsAgentDockTools(t *testing.T) {
 	structured, ok := result.StructuredContent.(map[string]any)
 	if !ok || structured["server"] != config.ServerName || result.IsError {
 		t.Fatalf("CallTool() result = %#v", result)
+	}
+
+	if err := session.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+	if err := <-serverDone; err != nil {
+		t.Fatalf("Server.Run() error = %v", err)
+	}
+}
+
+func TestOfficialSDKToolsListPreservesFrozenD2AgentSchemas(t *testing.T) {
+	root := t.TempDir()
+	cfg := config.Config{AgentDockDefaultDir: root, AgentDockHome: filepath.Join(root, ".agentdock")}
+	if err := cfg.Normalize(); err != nil {
+		t.Fatalf("Normalize() error = %v", err)
+	}
+	runtime, err := app.NewRuntime(cfg)
+	if err != nil {
+		t.Fatalf("NewRuntime() error = %v", err)
+	}
+	defer runtime.Close()
+
+	serverTransport, clientTransport := mcpsdk.NewInMemoryTransports()
+	server := NewServer(runtime, cfg)
+	serverDone := make(chan error, 1)
+	go func() { serverDone <- server.sdk.Run(t.Context(), serverTransport) }()
+
+	client := mcpsdk.NewClient(&mcpsdk.Implementation{Name: "agentdock-d2-schema-test", Version: "1.0.0"}, &mcpsdk.ClientOptions{Capabilities: &mcpsdk.ClientCapabilities{}})
+	session, err := client.Connect(t.Context(), clientTransport, nil)
+	if err != nil {
+		t.Fatalf("Connect() error = %v", err)
+	}
+
+	actual := map[string]*mcpsdk.Tool{}
+	for tool, err := range session.Tools(t.Context(), nil) {
+		if err != nil {
+			t.Fatalf("Tools() error = %v", err)
+		}
+		if strings.HasPrefix(tool.Name, "agent_") {
+			actual[tool.Name] = tool
+		}
+	}
+	for _, name := range []string{"agent_start", "agent_status", "agent_output", "agent_cancel", "agent_result", "agent_list"} {
+		tool := actual[name]
+		if tool == nil {
+			t.Fatalf("raw tools/list missing %s", name)
+		}
+		file := "agent-" + strings.TrimPrefix(name, "agent_") + ".schema.json"
+		body, err := os.ReadFile(filepath.Join("..", "app", "d2contract", file))
+		if err != nil {
+			t.Fatalf("read frozen %s: %v", file, err)
+		}
+		var frozen map[string]any
+		if err := json.Unmarshal(body, &frozen); err != nil {
+			t.Fatalf("parse frozen %s: %v", file, err)
+		}
+		expectedOutput, ok := frozen["x-success-output"].(map[string]any)
+		if !ok {
+			t.Fatalf("frozen %s missing x-success-output", file)
+		}
+		if !reflect.DeepEqual(tool.InputSchema, frozen) {
+			t.Fatalf("raw tools/list %s input schema drifted from B FINAL: got=%#v want=%#v", name, tool.InputSchema, frozen)
+		}
+		if !reflect.DeepEqual(tool.OutputSchema, expectedOutput) {
+			t.Fatalf("raw tools/list %s output schema drifted from B FINAL: got=%#v want=%#v", name, tool.OutputSchema, expectedOutput)
+		}
 	}
 
 	if err := session.Close(); err != nil {

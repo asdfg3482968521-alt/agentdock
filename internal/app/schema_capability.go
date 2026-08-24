@@ -5,6 +5,9 @@ import "github.com/uvwt/agentdock/internal/config"
 // InputSchemaForConfig 返回当前配置下真正对模型可见的参数契约。
 // task_manage 的本地任务能力始终存在，但 Nexus 专属扩展只在 Nexus 启用时公开。
 func InputSchemaForConfig(name string, cfg config.Config) map[string]any {
+	if _, ok := d2AgentSchemaFiles[name]; ok {
+		return frozenAgentInputSchema(name)
+	}
 	schema := InputSchema(name)
 	if name != "task_manage" || requiresNexus(cfg) {
 		return schema
@@ -24,6 +27,9 @@ func InputSchemaForConfig(name string, cfg config.Config) map[string]any {
 // OutputSchemaForConfig 与输入契约保持同一能力边界，避免无 Nexus 时泄露
 // Guidance、candidate 或 evidence revision 等 Evolution 概念。
 func OutputSchemaForConfig(name string, cfg config.Config) map[string]any {
+	if _, ok := d2AgentSchemaFiles[name]; ok {
+		return frozenAgentOutputSchema(name)
+	}
 	schema := OutputSchema(name)
 	if name != "task_manage" || requiresNexus(cfg) {
 		return schema
