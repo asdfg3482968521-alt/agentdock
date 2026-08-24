@@ -111,9 +111,22 @@ func (m *Manager) Start(ctx context.Context, request StartRequest) (Record, erro
 	request.SessionID = strings.TrimSpace(request.SessionID)
 	request.Provider = strings.ToLower(strings.TrimSpace(request.Provider))
 	request.Model = strings.TrimSpace(request.Model)
+	request.Role = strings.TrimSpace(request.Role)
 	request.CredentialRef = strings.TrimSpace(request.CredentialRef)
 	if request.SessionID == "" || request.Provider == "" || request.MaxRequests < 1 {
 		return Record{}, fmt.Errorf("%w: session_id, provider, and budget.max_requests >= 1 are required", ErrInvalidArguments)
+	}
+	if request.Role == "" {
+		request.Role = "implementation"
+	}
+	if !validAgentRole(request.Role) {
+		return Record{}, fmt.Errorf("%w: invalid role", ErrInvalidArguments)
+	}
+	if request.Timeout <= 0 {
+		request.Timeout = 2 * time.Minute
+	}
+	if request.Timeout > 24*time.Hour {
+		return Record{}, fmt.Errorf("%w: timeout_ms must be <= 86400000", ErrInvalidArguments)
 	}
 	if err := credential.ValidateRef(request.CredentialRef); err != nil {
 		return Record{}, err
@@ -122,6 +135,11 @@ func (m *Manager) Start(ctx context.Context, request StartRequest) (Record, erro
 	if provider == nil {
 		return Record{}, ErrProviderUnsupported
 	}
+	resolvedModel, err := resolveProviderModel(provider, request.Model)
+	if err != nil {
+		return Record{}, err
+	}
+	request.Model = resolvedModel
 	binding, err := m.options.Sessions.ResolveAgentSession(ctx, request.SessionID)
 	if err != nil {
 		return Record{}, err
@@ -164,8 +182,10 @@ func (m *Manager) Start(ctx context.Context, request StartRequest) (Record, erro
 	now := m.options.Now().UTC()
 	record := Record{
 		AgentID: id, SessionID: request.SessionID, Workspace: binding.Workspace, RuntimeScope: binding.RuntimeScope,
-		PermissionMode: permission, Provider: request.Provider, Model: request.Model, CredentialRef: request.CredentialRef,
-		MaxRequests: request.MaxRequests, State: AgentStateQueued, CreatedAt: now, UpdatedAt: now,
+		PermissionMode: permission, Provider: request.Provider, Model: request.Model, ResolvedModel: request.Model,
+		Role: request.Role, CredentialRef: request.CredentialRef, TimeoutMS: request.Timeout.Milliseconds(),
+		Budget: AgentBudget{MaxRequests: request.MaxRequests}, MaxRequests: request.MaxRequests,
+		State: AgentStateQueued, CreatedAt: now, UpdatedAt: now,
 	}
 	copyRequest := request
 	managed := &managedAgent{record: record, request: &copyRequest, done: make(chan struct{})}
@@ -195,6 +215,45 @@ func normalizeAgentPermission(sessionPermission string) (string, error) {
 	default:
 		return "", ErrAgentSessionClosed
 	}
+}
+
+func validAgentRole(role string) bool {
+	if len(role) < 1 || len(role) > 128 {
+		return false
+	}
+	for i := 0; i < len(role); i++ {
+		c := role[i]
+		alphaNum := (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9')
+		if i == 0 {
+			if !alphaNum {
+				return false
+			}
+			continue
+		}
+		if !alphaNum && c != '.' && c != '_' && c != '-' {
+			return false
+		}
+	}
+	return true
+}
+
+func resolveProviderModel(provider ProviderAdapter, raw string) (string, error) {
+	if resolver, ok := provider.(ProviderModelResolver); ok {
+		model, err := resolver.ResolveModel(raw)
+		if err != nil {
+			return "", err
+		}
+		model = strings.TrimSpace(model)
+		if model == "" || model == "default" {
+			return "", &providerError{code: ProviderErrorModelUnavailable, err: errors.New("provider did not resolve a concrete model")}
+		}
+		return model, nil
+	}
+	model := strings.TrimSpace(raw)
+	if model == "" || model == "default" {
+		return "", &providerError{code: ProviderErrorModelUnavailable, err: errors.New("provider has no deterministic model resolver")}
+	}
+	return model, nil
 }
 
 func (m *Manager) allocateIDLocked() string {
@@ -277,7 +336,7 @@ func (m *Manager) runAgent(ctx context.Context, id string) {
 
 	secret, err := m.options.Credentials.Resolve(ctx, request.CredentialRef)
 	if err != nil {
-		m.finishAgent(id, AgentStateFailed, ProviderResult{}, "credential resolution failed")
+		m.finishAgent(id, AgentStateFailed, ProviderResult{}, err, nil)
 		return
 	}
 	defer credential.Zero(secret)
@@ -292,7 +351,7 @@ func (m *Manager) runAgent(ctx context.Context, id string) {
 			return
 		}
 		if err := m.reserveProviderRequest(id); err != nil {
-			m.finishAgent(id, AgentStateFailed, lastResult, ErrBudgetExceeded.Error())
+			m.finishAgent(id, AgentStateFailed, lastResult, ErrBudgetExceeded, secret)
 			return
 		}
 
@@ -317,16 +376,17 @@ func (m *Manager) runAgent(ctx context.Context, id string) {
 		})
 		result.Summary = sanitizeAgentText(result.Summary, secret)
 		lastResult = result
+		m.recordProviderUsage(id, result.Usage)
 		if runErr != nil {
 			m.finishAgentContextError(id, result, runErr, secret)
 			return
 		}
 		if len(toolCalls) == 0 {
-			m.finishAgent(id, AgentStateSucceeded, result, "")
+			m.finishAgent(id, AgentStateSucceeded, result, nil, secret)
 			return
 		}
 		if m.options.Tools == nil {
-			m.finishAgent(id, AgentStateFailed, result, ErrToolError.Error())
+			m.finishAgent(id, AgentStateFailed, result, ErrToolError, secret)
 			return
 		}
 
@@ -341,7 +401,7 @@ func (m *Manager) runAgent(ctx context.Context, id string) {
 			}
 			arguments, err := decodeToolArguments(call.Arguments)
 			if err != nil {
-				m.finishAgent(id, AgentStateFailed, result, ErrToolError.Error())
+				m.finishAgent(id, AgentStateFailed, result, ErrToolError, secret)
 				return
 			}
 			toolResult, err := m.options.Tools.Execute(ctx, ToolExecutionRequest{
@@ -353,7 +413,7 @@ func (m *Manager) runAgent(ctx context.Context, id string) {
 					m.finishAgentContextError(id, result, err, secret)
 					return
 				}
-				m.finishAgent(id, AgentStateFailed, result, sanitizeAgentText(err.Error(), secret))
+				m.finishAgent(id, AgentStateFailed, result, err, secret)
 				return
 			}
 			text := sanitizeAgentText(toolResult.Text, secret)
@@ -372,10 +432,37 @@ func (m *Manager) reserveProviderRequest(id string) error {
 		return ErrBudgetExceeded
 	}
 	managed.record.RequestsUsed++
+	managed.record.Usage.Requests = managed.record.RequestsUsed
 	managed.record.UpdatedAt = m.options.Now().UTC()
 	record := cloneAgentRecord(managed.record)
 	m.mu.Unlock()
 	return m.persistence.save(record)
+}
+
+func (m *Manager) recordProviderUsage(id string, usage Usage) {
+	if !usage.Known {
+		return
+	}
+	m.mu.Lock()
+	managed := m.agents[id]
+	if managed == nil {
+		m.mu.Unlock()
+		return
+	}
+	input := usage.InputTokens
+	output := usage.OutputTokens
+	if managed.record.Usage.InputTokens != nil {
+		input += *managed.record.Usage.InputTokens
+	}
+	if managed.record.Usage.OutputTokens != nil {
+		output += *managed.record.Usage.OutputTokens
+	}
+	managed.record.Usage.InputTokens = &input
+	managed.record.Usage.OutputTokens = &output
+	managed.record.UpdatedAt = m.options.Now().UTC()
+	record := cloneAgentRecord(managed.record)
+	m.mu.Unlock()
+	_ = m.persistence.save(record)
 }
 
 func (m *Manager) finishAgentContextError(id string, result ProviderResult, runErr error, secret []byte) {
@@ -386,7 +473,7 @@ func (m *Manager) finishAgentContextError(id string, result ProviderResult, runE
 	case errors.Is(runErr, context.DeadlineExceeded):
 		state = AgentStateTimedOut
 	}
-	m.finishAgent(id, state, result, sanitizeAgentText(runErr.Error(), secret))
+	m.finishAgent(id, state, result, runErr, secret)
 }
 
 func (m *Manager) appendEvent(id string, event ProviderEvent, secret credential.Secret) error {
@@ -445,7 +532,7 @@ func sanitizeAgentText(text string, secret []byte) string {
 	return redact.Text(text)
 }
 
-func (m *Manager) finishAgent(id string, state AgentState, result ProviderResult, message string) {
+func (m *Manager) finishAgent(id string, state AgentState, result ProviderResult, failure error, secret []byte) {
 	m.mu.Lock()
 	managed := m.agents[id]
 	if managed == nil {
@@ -464,15 +551,27 @@ func (m *Manager) finishAgent(id string, state AgentState, result ProviderResult
 	}
 	if !state.Terminal() || (!validAgentTransition(current, state) && current != state) {
 		state = AgentStateFailed
+		if failure == nil {
+			failure = ErrInvalidAgentTransition
+		}
 	}
 	now := m.options.Now().UTC()
 	managed.record.State = state
 	managed.record.FinishedAt = &now
 	managed.record.UpdatedAt = now
-	managed.record.ResolvedModel = result.ResolvedModel
+	if strings.TrimSpace(result.ResolvedModel) != "" {
+		managed.record.ResolvedModel = result.ResolvedModel
+		managed.record.Model = result.ResolvedModel
+	}
 	managed.record.StopReason = result.StopReason
-	managed.record.ResultSummary = sanitizeAgentText(result.Summary, nil)
-	managed.record.Error = redact.Text(message)
+	managed.record.ResultSummary = sanitizeAgentText(result.Summary, secret)
+	managed.record.FailureReason = nil
+	managed.record.Error = ""
+	if failure != nil {
+		envelope := AgentErrorFrom(failure, secret)
+		managed.record.FailureReason = &envelope
+		managed.record.Error = envelope.Message
+	}
 	managed.request = nil
 	if managed.cancel != nil {
 		managed.cancel()
@@ -744,4 +843,29 @@ func (m *Manager) Close() error {
 	return nil
 }
 
-func cloneAgentRecord(record Record) Record { return record }
+func cloneAgentRecord(record Record) Record {
+	cloned := record
+	if record.Usage.InputTokens != nil {
+		value := *record.Usage.InputTokens
+		cloned.Usage.InputTokens = &value
+	}
+	if record.Usage.OutputTokens != nil {
+		value := *record.Usage.OutputTokens
+		cloned.Usage.OutputTokens = &value
+	}
+	if record.FailureReason != nil {
+		envelope := *record.FailureReason
+		if record.FailureReason.ProviderCode != nil {
+			value := *record.FailureReason.ProviderCode
+			envelope.ProviderCode = &value
+		}
+		if record.FailureReason.Details != nil {
+			envelope.Details = make(map[string]any, len(record.FailureReason.Details))
+			for key, value := range record.FailureReason.Details {
+				envelope.Details[key] = value
+			}
+		}
+		cloned.FailureReason = &envelope
+	}
+	return cloned
+}

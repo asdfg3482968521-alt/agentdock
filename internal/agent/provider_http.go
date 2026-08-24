@@ -123,7 +123,7 @@ func newHTTPProvider(kind string, options ProviderHTTPOptions) ProviderAdapter {
 }
 
 func (p *httpProvider) Run(ctx context.Context, request ProviderRequest, emit func(ProviderEvent) error) (ProviderResult, error) {
-	model, err := p.resolveModel(request.Model)
+	model, err := p.ResolveModel(request.Model)
 	if err != nil {
 		return ProviderResult{}, err
 	}
@@ -167,7 +167,7 @@ func (p *httpProvider) Run(ctx context.Context, request ProviderRequest, emit fu
 	}
 }
 
-func (p *httpProvider) resolveModel(raw string) (string, error) {
+func (p *httpProvider) ResolveModel(raw string) (string, error) {
 	model := strings.TrimSpace(raw)
 	if model == "" || model == "default" {
 		if p.kind == "anthropic" {
@@ -401,7 +401,7 @@ func parseAnthropicResponse(body []byte) (ProviderResult, []ProviderEvent, error
 			Name  string          `json:"name"`
 			Input json.RawMessage `json:"input"`
 		} `json:"content"`
-		Usage struct {
+		Usage *struct {
 			InputTokens  int64 `json:"input_tokens"`
 			OutputTokens int64 `json:"output_tokens"`
 		} `json:"usage"`
@@ -423,8 +423,11 @@ func parseAnthropicResponse(body []byte) (ProviderResult, []ProviderEvent, error
 			events = append(events, ProviderEvent{Kind: ProviderEventTool, Tool: &ToolCall{ID: block.ID, Name: block.Name, Arguments: append(json.RawMessage(nil), block.Input...)}})
 		}
 	}
-	usage := Usage{InputTokens: response.Usage.InputTokens, OutputTokens: response.Usage.OutputTokens}
-	usage.TotalTokens = usage.InputTokens + usage.OutputTokens
+	usage := Usage{}
+	if response.Usage != nil {
+		usage = Usage{InputTokens: response.Usage.InputTokens, OutputTokens: response.Usage.OutputTokens, Known: true}
+		usage.TotalTokens = usage.InputTokens + usage.OutputTokens
+	}
 	return ProviderResult{Summary: summary.String(), ResolvedModel: response.Model, StopReason: response.StopReason, Usage: usage}, events, nil
 }
 
@@ -444,7 +447,7 @@ func parseDeepSeekResponse(body []byte) (ProviderResult, []ProviderEvent, error)
 			} `json:"message"`
 			FinishReason string `json:"finish_reason"`
 		} `json:"choices"`
-		Usage struct {
+		Usage *struct {
 			PromptTokens     int64 `json:"prompt_tokens"`
 			CompletionTokens int64 `json:"completion_tokens"`
 			TotalTokens      int64 `json:"total_tokens"`
@@ -465,11 +468,15 @@ func parseDeepSeekResponse(body []byte) (ProviderResult, []ProviderEvent, error)
 		}
 		events = append(events, ProviderEvent{Kind: ProviderEventTool, Tool: &ToolCall{ID: call.ID, Name: call.Function.Name, Arguments: append(json.RawMessage(nil), arguments...)}})
 	}
+	usage := Usage{}
+	if response.Usage != nil {
+		usage = Usage{InputTokens: response.Usage.PromptTokens, OutputTokens: response.Usage.CompletionTokens, TotalTokens: response.Usage.TotalTokens, Known: true}
+	}
 	return ProviderResult{
 		Summary:       choice.Message.Content,
 		ResolvedModel: response.Model,
 		StopReason:    choice.FinishReason,
-		Usage:         Usage{InputTokens: response.Usage.PromptTokens, OutputTokens: response.Usage.CompletionTokens, TotalTokens: response.Usage.TotalTokens},
+		Usage:         usage,
 	}, events, nil
 }
 

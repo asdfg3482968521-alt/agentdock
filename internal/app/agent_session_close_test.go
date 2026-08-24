@@ -25,6 +25,13 @@ type closeBlockingProvider struct {
 	onCancel func(string)
 }
 
+func (p *closeBlockingProvider) ResolveModel(raw string) (string, error) {
+	if raw == "" || raw == "default" {
+		return "fake-model", nil
+	}
+	return raw, nil
+}
+
 func (p *closeBlockingProvider) Run(ctx context.Context, request agentruntime.ProviderRequest, _ func(agentruntime.ProviderEvent) error) (agentruntime.ProviderResult, error) {
 	select {
 	case p.started <- request.AgentID:

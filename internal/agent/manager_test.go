@@ -44,6 +44,14 @@ type blockingProvider struct {
 	max     atomic.Int32
 }
 
+func (p *blockingProvider) ResolveModel(raw string) (string, error) {
+	model := strings.TrimSpace(raw)
+	if model == "" || model == "default" {
+		return "fake-model", nil
+	}
+	return model, nil
+}
+
 func (p *blockingProvider) Run(ctx context.Context, req ProviderRequest, emit func(ProviderEvent) error) (ProviderResult, error) {
 	active := p.active.Add(1)
 	defer p.active.Add(-1)
@@ -338,6 +346,14 @@ func TestAgentManagerRestartReconcilesNonTerminalWithoutReplay(t *testing.T) {
 
 // ProviderAdapterFunc makes deterministic manager tests concise.
 type ProviderAdapterFunc func(context.Context, ProviderRequest, func(ProviderEvent) error) (ProviderResult, error)
+
+func (f ProviderAdapterFunc) ResolveModel(raw string) (string, error) {
+	model := strings.TrimSpace(raw)
+	if model == "" || model == "default" {
+		return "fake-model", nil
+	}
+	return model, nil
+}
 
 func (f ProviderAdapterFunc) Run(ctx context.Context, req ProviderRequest, emit func(ProviderEvent) error) (ProviderResult, error) {
 	return f(ctx, req, emit)

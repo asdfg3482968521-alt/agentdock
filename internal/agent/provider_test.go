@@ -13,6 +13,13 @@ type scriptedProvider struct {
 	result ProviderResult
 }
 
+func (provider scriptedProvider) ResolveModel(raw string) (string, error) {
+	if raw == "" || raw == "default" {
+		return "fake-model", nil
+	}
+	return raw, nil
+}
+
 func (provider scriptedProvider) Run(ctx context.Context, request ProviderRequest, emit func(ProviderEvent) error) (ProviderResult, error) {
 	for _, event := range provider.events {
 		select {

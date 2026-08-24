@@ -99,27 +99,80 @@ type StartRequest struct {
 	Timeout        time.Duration
 }
 
+type AgentBudget struct {
+	MaxRequests int `json:"max_requests"`
+}
+
+type AgentUsage struct {
+	Requests     int    `json:"requests"`
+	InputTokens  *int64 `json:"input_tokens"`
+	OutputTokens *int64 `json:"output_tokens"`
+}
+
+type ErrorEnvelope struct {
+	Code         string         `json:"code"`
+	Message      string         `json:"message"`
+	Retryable    bool           `json:"retryable"`
+	ProviderCode *string        `json:"provider_code,omitempty"`
+	Details      map[string]any `json:"details,omitempty"`
+}
+
 type Record struct {
-	AgentID        string     `json:"agent_id"`
-	SessionID      string     `json:"session_id"`
-	Workspace      string     `json:"workspace"`
-	RuntimeScope   string     `json:"runtime_scope"`
-	PermissionMode string     `json:"permission_mode"`
-	Provider       string     `json:"provider"`
-	Model          string     `json:"model"`
-	ResolvedModel  string     `json:"resolved_model,omitempty"`
-	CredentialRef  string     `json:"credential_ref"`
-	MaxRequests    int        `json:"max_requests"`
-	RequestsUsed   int        `json:"requests_used"`
-	State          AgentState `json:"state"`
-	CreatedAt      time.Time  `json:"created_at"`
-	StartedAt      *time.Time `json:"started_at,omitempty"`
-	FinishedAt     *time.Time `json:"finished_at,omitempty"`
-	UpdatedAt      time.Time  `json:"updated_at"`
-	OutputCursor   int64      `json:"output_cursor"`
-	ResultSummary  string     `json:"result_summary,omitempty"`
-	Error          string     `json:"error,omitempty"`
-	StopReason     string     `json:"stop_reason,omitempty"`
+	AgentID        string         `json:"agent_id"`
+	SessionID      string         `json:"session_id"`
+	Workspace      string         `json:"workspace"`
+	RuntimeScope   string         `json:"runtime_scope"`
+	PermissionMode string         `json:"permission_mode"`
+	Provider       string         `json:"provider"`
+	Model          string         `json:"model"`
+	ResolvedModel  string         `json:"resolved_model,omitempty"`
+	Role           string         `json:"role"`
+	CredentialRef  string         `json:"credential_ref"`
+	TimeoutMS      int64          `json:"timeout_ms"`
+	Budget         AgentBudget    `json:"budget"`
+	Usage          AgentUsage     `json:"usage"`
+	MaxRequests    int            `json:"max_requests"`
+	RequestsUsed   int            `json:"requests_used"`
+	State          AgentState     `json:"state"`
+	CreatedAt      time.Time      `json:"created_at"`
+	StartedAt      *time.Time     `json:"started_at,omitempty"`
+	FinishedAt     *time.Time     `json:"finished_at,omitempty"`
+	UpdatedAt      time.Time      `json:"updated_at"`
+	OutputCursor   int64          `json:"output_cursor"`
+	ResultSummary  string         `json:"result_summary,omitempty"`
+	Error          string         `json:"error,omitempty"`
+	FailureReason  *ErrorEnvelope `json:"failure_reason,omitempty"`
+	StopReason     string         `json:"stop_reason,omitempty"`
+}
+
+type AgentResource struct {
+	AgentID       string         `json:"agent_id"`
+	SessionID     string         `json:"session_id"`
+	Provider      string         `json:"provider"`
+	Model         string         `json:"model"`
+	Role          string         `json:"role"`
+	CredentialRef string         `json:"credential_ref"`
+	Permission    string         `json:"permission"`
+	TimeoutMS     int64          `json:"timeout_ms"`
+	Budget        AgentBudget    `json:"budget"`
+	State         AgentState     `json:"state"`
+	CreatedAt     time.Time      `json:"created_at"`
+	StartedAt     *time.Time     `json:"started_at"`
+	FinishedAt    *time.Time     `json:"finished_at"`
+	FailureReason *ErrorEnvelope `json:"failure_reason"`
+	RuntimeScope  string         `json:"runtime_scope"`
+	OutputCursor  int64          `json:"output_cursor"`
+	Usage         AgentUsage     `json:"usage"`
+}
+
+func PublicResource(record Record) AgentResource {
+	return AgentResource{
+		AgentID: record.AgentID, SessionID: record.SessionID, Provider: record.Provider, Model: record.Model,
+		Role: record.Role, CredentialRef: record.CredentialRef, Permission: record.PermissionMode, TimeoutMS: record.TimeoutMS,
+		Budget: record.Budget, State: record.State, CreatedAt: record.CreatedAt, StartedAt: record.StartedAt,
+		FinishedAt: record.FinishedAt, FailureReason: record.FailureReason, RuntimeScope: record.RuntimeScope,
+		OutputCursor: record.OutputCursor, Usage: record.Usage,
+	}
 }
 
 type OutputResult struct {

@@ -16,6 +16,7 @@ type Usage struct {
 	InputTokens  int64 `json:"input_tokens"`
 	OutputTokens int64 `json:"output_tokens"`
 	TotalTokens  int64 `json:"total_tokens"`
+	Known        bool  `json:"-"`
 }
 
 type ToolCall struct {
@@ -65,4 +66,8 @@ type ProviderResult struct {
 
 type ProviderAdapter interface {
 	Run(context.Context, ProviderRequest, func(ProviderEvent) error) (ProviderResult, error)
+}
+
+type ProviderModelResolver interface {
+	ResolveModel(string) (string, error)
 }

@@ -344,6 +344,27 @@ func TestProviderSuccessfulOutputDoesNotLeakCredential(t *testing.T) {
 	}
 }
 
+func TestProviderUsageRemainsUnknownWhenResponseOmitsUsage(t *testing.T) {
+	t.Run("anthropic", func(t *testing.T) {
+		result, _, err := parseAnthropicResponse([]byte(`{"model":"claude-opus-5","stop_reason":"end_turn","content":[{"type":"text","text":"ok"}]}`))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if result.Usage.Known {
+			t.Fatalf("usage unexpectedly known: %+v", result.Usage)
+		}
+	})
+	t.Run("deepseek", func(t *testing.T) {
+		result, _, err := parseDeepSeekResponse([]byte(`{"model":"deepseek-v4-flash","choices":[{"message":{"content":"ok"},"finish_reason":"stop"}]}`))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if result.Usage.Known {
+			t.Fatalf("usage unexpectedly known: %+v", result.Usage)
+		}
+	})
+}
+
 func TestProviderRejectsUnavailableModelBeforeNetwork(t *testing.T) {
 	var calls atomic.Int32
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { calls.Add(1) }))
