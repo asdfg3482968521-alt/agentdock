@@ -5,6 +5,8 @@ package session
 import (
 	"context"
 	"os"
+	"os/exec"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -65,5 +67,44 @@ func TestWindowsTTYUsesConPTYAndAcceptsInput(t *testing.T) {
 	stdout, _ := result["stdout"].(string)
 	if !strings.Contains(stdout, "received:hello") {
 		t.Fatalf("stdout = %q", stdout)
+	}
+}
+
+func TestWindowsSpawnFailureDoesNotCorruptSubsequentSpawn(t *testing.T) {
+	missing := filepath.Join(t.TempDir(), "missing-child.exe")
+	_, _, err := StartCommandWithTTY(
+		context.Background(),
+		func(ctx context.Context) *exec.Cmd { return exec.CommandContext(ctx, missing) },
+		5*time.Second,
+		false,
+		nil,
+	)
+	if err == nil {
+		t.Fatal("missing child unexpectedly started")
+	}
+
+	s, _, err := Start(
+		context.Background(),
+		"[Console]::Out.Write('subsequent-ok')",
+		t.TempDir(),
+		os.Environ(),
+		5*time.Second,
+		nil,
+	)
+	if err != nil {
+		t.Fatalf("subsequent spawn failed after prior error: %v", err)
+	}
+	defer s.Cancel()
+	select {
+	case <-s.Done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("subsequent child did not finish")
+	}
+	if err := s.WaitError(); err != nil {
+		t.Fatal(err)
+	}
+	result := s.Snapshot("exited", 4096)
+	if result["stdout"] != "subsequent-ok" {
+		t.Fatalf("subsequent stdout = %#v", result["stdout"])
 	}
 }

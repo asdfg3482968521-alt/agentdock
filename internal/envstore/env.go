@@ -2,7 +2,9 @@ package envstore
 
 import (
 	"os"
+	"runtime"
 	"sort"
+	"strings"
 )
 
 var minimalSystemKeys = []string{
@@ -35,6 +37,20 @@ func MinimalSystemEnv() map[string]string {
 	return env
 }
 
+// InheritedEnv snapshots the current AgentDock process environment for a child
+// process. Callers may then apply only the overrides owned by that spawn path.
+func InheritedEnv() map[string]string {
+	env := make(map[string]string)
+	for _, entry := range os.Environ() {
+		key, value, ok := strings.Cut(entry, "=")
+		if !ok || key == "" {
+			continue
+		}
+		env[key] = value
+	}
+	return env
+}
+
 func Merge(base map[string]string, overlays ...map[string]string) map[string]string {
 	merged := make(map[string]string, len(base))
 	for key, value := range base {
@@ -42,10 +58,22 @@ func Merge(base map[string]string, overlays ...map[string]string) map[string]str
 	}
 	for _, overlay := range overlays {
 		for key, value := range overlay {
-			merged[key] = value
+			mergeValue(merged, key, value)
 		}
 	}
 	return merged
+}
+
+func mergeValue(environment map[string]string, key, value string) {
+	if runtime.GOOS == "windows" {
+		for existingKey := range environment {
+			if strings.EqualFold(existingKey, key) {
+				environment[existingKey] = value
+				return
+			}
+		}
+	}
+	environment[key] = value
 }
 
 func Format(values map[string]string) []string {

@@ -137,15 +137,13 @@ func (svc *Service) commandEnvOverrides(skillName string, extra map[string]any) 
 		if err != nil {
 			return nil, toolErrorDetails("SKILL_ENV_INVALID", "load Skill environment", "validation", map[string]any{"skill": skillName, "reason": err.Error()})
 		}
-		for key, value := range values {
-			overrides[key] = value
-		}
+		overrides = envstore.Merge(overrides, values)
 	}
 	for key, value := range extra {
 		if err := envstore.ValidateKey(key); err != nil {
 			return nil, toolErrorDetails("INVALID_ENV_NAME", err.Error(), "validation", map[string]any{"key": key})
 		}
-		overrides[key] = fmt.Sprint(value)
+		overrides = envstore.Merge(overrides, map[string]string{key: fmt.Sprint(value)})
 	}
 	return overrides, nil
 }

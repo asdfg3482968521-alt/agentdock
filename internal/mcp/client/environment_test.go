@@ -2,15 +2,26 @@ package client
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
+	"time"
 )
 
-func TestStdioEnvironmentIsIsolatedAndScopedValuesWin(t *testing.T) {
-	t.Setenv("AGENTDOCK_UNRELATED_PARENT_SECRET", "parent-only")
+func TestStdioEnvironmentInheritsParentAndScopedValuesWin(t *testing.T) {
+	t.Setenv("AGENTDOCK_UNRELATED_PARENT_SENTINEL", "parent-only")
 	t.Setenv("HOST_MAPPED_VALUE", "mapped-from-host")
+	t.Setenv("MAPPED", "parent-mapped")
+	t.Setenv("PATH", "parent-path")
+	for _, key := range []string{"USERPROFILE", "APPDATA", "LOCALAPPDATA", "GOPATH", "GOMODCACHE"} {
+		t.Setenv(key, "")
+	}
 
 	environment, err := stdioEnvironment(ServerConfig{
 		Name:       "demo",
@@ -24,16 +35,36 @@ func TestStdioEnvironmentIsIsolatedAndScopedValuesWin(t *testing.T) {
 		t.Fatal(err)
 	}
 	values := formattedEnvironmentMap(environment)
-	if _, exists := values["AGENTDOCK_UNRELATED_PARENT_SECRET"]; exists {
-		t.Fatal("stdio MCP inherited an unrelated parent environment variable")
+	if values["AGENTDOCK_UNRELATED_PARENT_SENTINEL"] != "parent-only" {
+		t.Fatal("stdio MCP did not inherit unrelated parent environment variable")
+	}
+	if values["PATH"] != "parent-path" {
+		t.Fatalf("PATH = %q, want parent-path", values["PATH"])
 	}
 	if values["MAPPED"] != "scoped-wins" || values["SCOPED"] != "configured" {
 		t.Fatalf("unexpected merged environment: %#v", values)
 	}
-	for _, key := range []string{"PATH", "HOME", "TMPDIR"} {
-		if values[key] == "" {
-			t.Fatalf("minimal environment omitted %s", key)
+	for _, key := range []string{"USERPROFILE", "APPDATA", "LOCALAPPDATA", "GOPATH", "GOMODCACHE"} {
+		if values[key] != "" {
+			t.Fatalf("%s was invented as %q", key, values[key])
 		}
+	}
+}
+
+func TestStdioEnvironmentEnvFromEnvOverridesParent(t *testing.T) {
+	t.Setenv("MAPPED", "parent-value")
+	t.Setenv("HOST_MAPPED_VALUE", "mapped-from-host")
+
+	environment, err := stdioEnvironment(ServerConfig{
+		Name:       "demo",
+		EnvFromEnv: map[string]string{"MAPPED": "HOST_MAPPED_VALUE"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	values := formattedEnvironmentMap(environment)
+	if values["MAPPED"] != "mapped-from-host" {
+		t.Fatalf("MAPPED = %q, want mapped-from-host", values["MAPPED"])
 	}
 }
 
@@ -85,8 +116,57 @@ func formattedEnvironmentMap(environment []string) map[string]string {
 	for _, item := range environment {
 		key, value, found := strings.Cut(item, "=")
 		if found {
+			if runtime.GOOS == "windows" {
+				key = strings.ToUpper(key)
+			}
 			values[key] = value
 		}
 	}
 	return values
+}
+
+func TestStdioSpawnFailureDoesNotExposeEnvironmentOrCorruptNextSpawn(t *testing.T) {
+	secret := "m-b-secret-value"
+	bad := newStdioClient(ServerConfig{
+		Name:      "missing",
+		Transport: TransportStdio,
+		Command:   filepath.Join(t.TempDir(), "missing-mcp.exe"),
+		RuntimeEnv: map[string]string{
+			"AGENTDOCK_M_B_SECRET": secret,
+		},
+	})
+	err := bad.initialize(context.Background())
+	if err == nil {
+		t.Fatal("missing MCP child unexpectedly initialized")
+	}
+	diagnostic := err.Error()
+	var mcpErr *Error
+	if errors.As(err, &mcpErr) {
+		diagnostic += fmt.Sprintf(" %#v %v", mcpErr.Details, mcpErr.Cause)
+	}
+	if strings.Contains(diagnostic, secret) {
+		t.Fatalf("spawn failure diagnostic leaked environment secret: %s", diagnostic)
+	}
+
+	t.Setenv("TEST_MCP_HELPER_MODE", "1")
+	good := newStdioClient(ServerConfig{
+		Name:       "healthy",
+		Transport:  TransportStdio,
+		Command:    os.Args[0],
+		Args:       []string{"-test.run=TestMCPStdioHelperProcess"},
+		EnvFromEnv: map[string]string{"GO_WANT_MCP_HELPER": "TEST_MCP_HELPER_MODE"},
+	})
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	if err := good.initialize(ctx); err != nil {
+		t.Fatalf("subsequent MCP spawn failed after prior error: %v", err)
+	}
+	defer good.close()
+	tools, err := good.listTools(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(tools) != 1 || tools[0].Name != "echo" {
+		t.Fatalf("unexpected subsequent MCP tools: %#v", tools)
+	}
 }
