@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -110,10 +111,10 @@ func NewRuntime(cfg config.Config) (*Runtime, error) {
 			LogDir:  cfg.OpenCodeLogDir,
 		})
 		if err != nil {
-			_ = runtime.Close()
-			return nil, fmt.Errorf("initialize OpenCode runtime supervisor: %w", err)
+			slog.Warn("OpenCode execution plane unavailable during runtime initialization", "plane", "EXECUTION_PLANE", "error", err)
+		} else {
+			runtime.openCode = supervisor
 		}
-		runtime.openCode = supervisor
 	}
 	jobStorageRoot := cfg.JobStorageRoot
 	if jobStorageRoot == "" {

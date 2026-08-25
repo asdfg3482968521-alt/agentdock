@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"net/http"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	sdkjsonrpc "github.com/modelcontextprotocol/go-sdk/jsonrpc"
@@ -22,10 +23,12 @@ type Server struct {
 	runtime     *app.Runtime
 	sdk         *mcpsdk.Server
 	httpHandler http.Handler
+	instanceID  string
+	requestSeq  atomic.Uint64
 }
 
 func NewServer(runtime *app.Runtime, cfg config.Config) *Server {
-	server := &Server{runtime: runtime}
+	server := &Server{runtime: runtime, instanceID: fmt.Sprintf("%x", time.Now().UnixNano())}
 	serverOptions := &mcpsdk.ServerOptions{Capabilities: &mcpsdk.ServerCapabilities{}}
 	if cfg.Instructions != "" {
 		// 可选说明文字随 initialize 响应下发，由支持 MCP instructions 的客户端注入模型上下文。
@@ -107,16 +110,18 @@ func (s *Server) registerTool(name string, cfg config.Config) {
 
 func (s *Server) callTool(ctx context.Context, name string, request *mcpsdk.CallToolRequest) (*mcpsdk.CallToolResult, error) {
 	started := time.Now()
+	requestID := fmt.Sprintf("%s-%d", s.instanceID, s.requestSeq.Add(1))
+	plane := toolRequestPlane(name)
 	arguments := map[string]any{}
 	if request != nil && request.Params != nil && len(request.Params.Arguments) > 0 && string(request.Params.Arguments) != "null" {
 		if err := json.Unmarshal(request.Params.Arguments, &arguments); err != nil {
-			slog.Warn("tool params invalid", "tool", name, "duration_ms", time.Since(started).Milliseconds())
+			slog.Warn("tool params invalid", "request_id", requestID, "server_instance", s.instanceID, "tool", name, "plane", plane, "duration_ms", time.Since(started).Milliseconds())
 			return nil, &sdkjsonrpc.Error{Code: sdkjsonrpc.CodeInvalidParams, Message: "tool arguments must be a JSON object"}
 		}
 	}
-	slog.Info("tool started", "tool", name)
-	result, err := s.runtime.Call(ctx, name, arguments)
-	finishedAttrs := []any{"tool", name, "duration_ms", time.Since(started).Milliseconds(), "ok", err == nil}
+	slog.Info("tool started", "request_id", requestID, "server_instance", s.instanceID, "tool", name, "plane", plane)
+	result, err := s.invokeTool(ctx, name, arguments, requestID, plane)
+	finishedAttrs := []any{"request_id", requestID, "server_instance", s.instanceID, "tool", name, "plane", plane, "duration_ms", time.Since(started).Milliseconds(), "ok", err == nil}
 	if err != nil {
 		finishedAttrs = append(finishedAttrs, "error", err)
 	}
@@ -131,6 +136,34 @@ func (s *Server) callTool(ctx context.Context, name string, request *mcpsdk.Call
 		return nil, fmt.Errorf("decode MCP tool result: %w", decodeErr)
 	}
 	return &response, nil
+}
+
+func (s *Server) invokeTool(ctx context.Context, name string, arguments map[string]any, requestID, plane string) (result app.Result, err error) {
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			slog.Error("tool panic contained", "request_id", requestID, "server_instance", s.instanceID, "tool", name, "plane", plane, "panic", recovered)
+			err = &app.ToolError{
+				Code: "MCP_TOOL_PANIC", Message: "tool request failed unexpectedly", Category: "runtime", Retryable: false,
+				Details: map[string]any{"tool": name, "plane": plane},
+			}
+		}
+	}()
+	if s == nil || s.runtime == nil {
+		return nil, &app.ToolError{
+			Code: "MCP_RUNTIME_UNAVAILABLE", Message: "AgentDock runtime is unavailable", Category: "runtime", Retryable: true,
+			Details: map[string]any{"tool": name, "plane": plane},
+		}
+	}
+	return s.runtime.Call(ctx, name, arguments)
+}
+
+func toolRequestPlane(name string) string {
+	switch name {
+	case "server_info", "agentdock_context", "mcp_manage", "mcp_tool_search", "mcp_tool_inspect":
+		return "CONTROL_PLANE"
+	default:
+		return "EXECUTION_PLANE"
+	}
 }
 
 func toolMetadata(def ToolDefinition) map[string]any {
