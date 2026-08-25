@@ -1,0 +1,63 @@
+name: C2.5 M-C Validation
+
+on:
+  push:
+    branches:
+      - phase-c2.5-m-c-validation
+
+permissions:
+  contents: read
+
+jobs:
+  focused:
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Exact candidate ancestry
+        shell: pwsh
+        run: |
+          git merge-base --is-ancestor d47e144bc78d21870d6060ac3749fc99a33e87e0 HEAD
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          git merge-base --is-ancestor a07b29fd55c16705b24e071d6c9505c48a50474c HEAD
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Control plane 20 of 20
+        shell: pwsh
+        run: |
+          $env:GOMAXPROCS='2'
+          go test -p=1 ./internal/mcp -run '^TestControlPlaneSurvivesUnavailableOpenCodeSupervisor$' -count=1
+      - name: Request containment
+        shell: pwsh
+        run: |
+          $env:GOMAXPROCS='2'
+          go test -p=1 ./internal/mcp -run '^(TestToolRequestPanicIsContainedAtMCPBoundary|TestCancelledRequestDoesNotCorruptNextRequest|TestServerRestartPreservesPublicToolSchema)$' -count=1
+      - name: Focused regression
+        shell: pwsh
+        run: |
+          $env:GOMAXPROCS='2'
+          go test -p=1 ./internal/mcp ./internal/app ./internal/envstore ./internal/tool/command ./internal/mcp/client ./internal/process ./internal/agent ./internal/job ./internal/session ./internal/opencode -count=1
+      - name: Diff hygiene
+        shell: pwsh
+        run: |
+          git diff --check b2231c62a96bd87e99373a07f1f3e1ace6223ae9...d475f725d417e24575c8adb93d2250e2851ddad5
+
+  full:
+    runs-on: windows-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Full regression
+        shell: pwsh
+        run: |
+          $env:GOMAXPROCS='2'
+          go test -p=1 ./... -count=1
