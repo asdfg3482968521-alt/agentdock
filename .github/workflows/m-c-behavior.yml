@@ -1,0 +1,63 @@
+name: C2.5 M-C Behavior Differential
+
+on:
+  push:
+    branches:
+      - phase-c2.5-m-c-behavior-aeecfb6
+
+permissions:
+  contents: read
+
+env:
+  CANDIDATE_SHA: aeecfb652d9e4b1014cd81e7e486468834a8a66a
+  M_BASE_SHA: b2231c62a96bd87e99373a07f1f3e1ace6223ae9
+  GOMAXPROCS: '2'
+  GOTOOLCHAIN: local
+
+jobs:
+  behavior:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.CANDIDATE_SHA }}
+          fetch-depth: 0
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Candidate versus baseline behavior failures
+        shell: pwsh
+        run: |
+          $candidateRoot = (Get-Location).Path
+          $baseRoot = Join-Path (Split-Path $candidateRoot -Parent) 'm-base-behavior'
+          git worktree add --detach $baseRoot $env:M_BASE_SHA
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+          function Invoke-GoSuite([string]$root, [string[]]$packages) {
+            Push-Location $root
+            $lines = @(& go test -json -p=1 @packages -count=1 2>&1)
+            $exitCode = $LASTEXITCODE
+            Pop-Location
+            $fails = @()
+            foreach ($line in $lines) {
+              try { $obj = $line | ConvertFrom-Json -ErrorAction Stop } catch { continue }
+              if ($obj.Action -eq 'fail') {
+                if ($obj.Test) { $fails += "$($obj.Package)::$($obj.Test)" }
+                elseif ($obj.Package) { $fails += "$($obj.Package)::<package>" }
+              }
+            }
+            return [pscustomobject]@{ ExitCode=$exitCode; Fails=@($fails | Sort-Object -Unique) }
+          }
+
+          $packages = @('./internal/agent','./internal/job','./internal/session')
+          $candidate = Invoke-GoSuite $candidateRoot $packages
+          $baseline = Invoke-GoSuite $baseRoot $packages
+          Write-Host "candidate failures: $($candidate.Fails -join ', ')"
+          Write-Host "baseline failures: $($baseline.Fails -join ', ')"
+          $new = @($candidate.Fails | Where-Object { $_ -notin $baseline.Fails })
+          if ($candidate.ExitCode -ne 0 -and $baseline.ExitCode -eq 0) { throw 'candidate failed while baseline passed' }
+          if ($new.Count -ne 0) { throw ("candidate-only behavior failures: " + ($new -join ', ')) }
+          Write-Host 'NO_NEW_BEHAVIOR_FAILURES_VS_M_BASE=YES'
+          $global:LASTEXITCODE = 0
+          exit 0
