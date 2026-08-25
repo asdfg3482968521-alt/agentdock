@@ -2,6 +2,7 @@ package envstore
 
 import (
 	"os"
+	"runtime"
 	"sort"
 	"strings"
 )
@@ -57,10 +58,22 @@ func Merge(base map[string]string, overlays ...map[string]string) map[string]str
 	}
 	for _, overlay := range overlays {
 		for key, value := range overlay {
-			merged[key] = value
+			mergeValue(merged, key, value)
 		}
 	}
 	return merged
+}
+
+func mergeValue(environment map[string]string, key, value string) {
+	if runtime.GOOS == "windows" {
+		for existingKey := range environment {
+			if strings.EqualFold(existingKey, key) {
+				environment[existingKey] = value
+				return
+			}
+		}
+	}
+	environment[key] = value
 }
 
 func Format(values map[string]string) []string {

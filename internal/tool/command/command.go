@@ -379,9 +379,7 @@ func (svc *Service) commandEnv(skillName string, extra map[string]any) ([]string
 	if err != nil {
 		return nil, err
 	}
-	for key, value := range overrides {
-		env[key] = value
-	}
+	env = envstore.Merge(env, overrides)
 	return formatCommandEnv(env), nil
 }
 
@@ -390,24 +388,25 @@ func (svc *Service) internalCommandEnv(extra map[string]string) ([]string, error
 	if err != nil {
 		return nil, err
 	}
-	for key, value := range extra {
-		env[key] = value
-	}
+	env = envstore.Merge(env, extra)
 	return formatCommandEnv(env), nil
 }
 
 func (svc *Service) baseCommandEnv() (map[string]string, error) {
-	env := envstore.InheritedEnv()
-	env["AGENTDOCK_HOME"] = svc.config().AgentDockHome
-	env["AGENTDOCK_DEFAULT_DIR"] = svc.config().AgentDockDefaultDir
+	cfg := svc.config()
+	env := envstore.Merge(envstore.InheritedEnv(), map[string]string{
+		"AGENTDOCK_HOME":        cfg.AgentDockHome,
+		"AGENTDOCK_DEFAULT_DIR": cfg.AgentDockDefaultDir,
+	})
 	hostHome := env["HOME"]
 	// macOS 的 launchd 默认只提供系统 PATH。命令工具需要补齐常见用户级可执行目录，
 	// 否则 Homebrew、~/.local/bin 中已安装的 CLI 在桌面服务里会表现为“未安装”。
 	if commandPath := platformCommandPath(env["PATH"], hostHome); commandPath != "" {
-		env["PATH"] = commandPath
+		env = envstore.Merge(env, map[string]string{"PATH": commandPath})
 	}
-	env["TMPDIR"] = filepath.Join(svc.config().AgentDockHome, "tmp")
-	if err := os.MkdirAll(env["TMPDIR"], 0o755); err != nil {
+	tmpDir := filepath.Join(cfg.AgentDockHome, "tmp")
+	env = envstore.Merge(env, map[string]string{"TMPDIR": tmpDir})
+	if err := os.MkdirAll(tmpDir, 0o755); err != nil {
 		return nil, fmt.Errorf("create command temp directory: %w", err)
 	}
 	return env, nil

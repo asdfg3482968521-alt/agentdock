@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -115,6 +116,9 @@ func formattedEnvironmentMap(environment []string) map[string]string {
 	for _, item := range environment {
 		key, value, found := strings.Cut(item, "=")
 		if found {
+			if runtime.GOOS == "windows" {
+				key = strings.ToUpper(key)
+			}
 			values[key] = value
 		}
 	}

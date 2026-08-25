@@ -254,6 +254,7 @@ func jsonObject(value any) (map[string]any, error) {
 
 func stdioEnvironment(cfg ServerConfig) ([]string, error) {
 	environment := envstore.InheritedEnv()
+	mapped := make(map[string]string, len(cfg.EnvFromEnv))
 	for childName, hostName := range cfg.EnvFromEnv {
 		value, ok := os.LookupEnv(hostName)
 		if !ok {
@@ -265,12 +266,10 @@ func stdioEnvironment(cfg ServerConfig) ([]string, error) {
 				nil,
 			)
 		}
-		environment[childName] = value
+		mapped[childName] = value
 	}
 	// 独立 MCP 环境文件属于该服务的明确配置，覆盖 parent environment 和 env_from_env 映射。
-	for key, value := range cfg.RuntimeEnv {
-		environment[key] = value
-	}
+	environment = envstore.Merge(environment, mapped, cfg.RuntimeEnv)
 	return envstore.Format(environment), nil
 }
 

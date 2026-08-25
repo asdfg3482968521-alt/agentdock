@@ -3,6 +3,7 @@
 package command
 
 import (
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -28,23 +29,120 @@ func TestCommandEnvPreservesWindowsProgramFilesVariables(t *testing.T) {
 		nil,
 	)
 
-	t.Setenv("PROGRAMFILES", `C:\Program Files`)
-	t.Setenv("PROGRAMW6432", `C:\Program Files`)
+	t.Setenv("ProgramFiles", `C:\Program Files`)
+	t.Setenv("ProgramW6432", `C:\Program Files`)
 	got, err := svc.CommandEnv("", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	values := map[string]string{}
-	for _, entry := range got {
-		key, value, ok := strings.Cut(entry, "=")
-		if ok {
-			values[key] = value
+	for _, key := range []string{"PROGRAMFILES", "PROGRAMW6432"} {
+		value, ok := windowsEnvironmentValue(got, key)
+		if !ok || value != `C:\Program Files` {
+			t.Fatalf("%s = %q, want %q", key, value, `C:\Program Files`)
 		}
 	}
-	for _, key := range []string{"PROGRAMFILES", "PROGRAMW6432"} {
-		if values[key] != `C:\Program Files` {
-			t.Fatalf("%s = %q, want %q", key, values[key], `C:\Program Files`)
+}
+
+func TestCommandEnvWindowsCaseInsensitiveOverrideWins(t *testing.T) {
+	home := t.TempDir()
+	envs, err := envstore.New(home)
+	if err != nil {
+		t.Fatal(err)
+	}
+	svc := New(
+		func() config.Config { return config.Config{AgentDockHome: home, AgentDockDefaultDir: home} },
+		nil,
+		envs,
+		NewSessionStore(),
+		nil,
+		nil,
+	)
+
+	const parentKey = "AgentDock_M_B_Casing"
+	const overrideKey = "AGENTDOCK_M_B_CASING"
+	t.Setenv(parentKey, "parent-value")
+	commandEnv, err := svc.CommandEnv("", map[string]any{overrideKey: "override-value"})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	matches := 0
+	observedKey := ""
+	observed := ""
+	for _, entry := range commandEnv {
+		key, value, ok := strings.Cut(entry, "=")
+		if ok && strings.EqualFold(key, parentKey) {
+			matches++
+			observedKey = key
+			observed = value
 		}
+	}
+	if matches != 1 {
+		t.Fatalf("case-insensitive key count = %d, want 1; env=%#v", matches, commandEnv)
+	}
+	if observedKey != parentKey {
+		t.Fatalf("canonical parent key casing = %q, want %q", observedKey, parentKey)
+	}
+	if observed != "override-value" {
+		t.Fatalf("case-insensitive override = %q, want override-value", observed)
+	}
+
+	cmd := exec.Command(os.Args[0], "-test.run=TestCommandEnvWindowsCaseInsensitiveOverrideHelper")
+	cmd.Env = append(commandEnv, "AGENTDOCK_M_B_CASING_HELPER=1")
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("helper child failed: %v: %s", err, output)
+	}
+	if got := strings.TrimSpace(string(output)); got != "override-value" {
+		t.Fatalf("child observed %q, want override-value", got)
+	}
+}
+
+func TestCommandEnvWindowsCaseInsensitiveOverrideHelper(t *testing.T) {
+	if os.Getenv("AGENTDOCK_M_B_CASING_HELPER") != "1" {
+		return
+	}
+	fmt.Print(os.Getenv("agentdock_m_b_casing"))
+	os.Exit(0)
+}
+
+func TestCommandEnvWindowsRequestOverrideWinsSkillRegardlessOfCasing(t *testing.T) {
+	home := t.TempDir()
+	envs, err := envstore.New(home)
+	if err != nil {
+		t.Fatal(err)
+	}
+	const skillKey = "AgentDock_M_B_Skill_Casing"
+	const requestKey = "AGENTDOCK_M_B_SKILL_CASING"
+	if err := envs.Set(envstore.Scope{Kind: envstore.ScopeSkill, Name: "demo"}, skillKey, "skill-value"); err != nil {
+		t.Fatal(err)
+	}
+	svc := New(
+		func() config.Config { return config.Config{AgentDockHome: home, AgentDockDefaultDir: home} },
+		nil,
+		envs,
+		NewSessionStore(),
+		nil,
+		nil,
+	)
+
+	overrides, err := svc.commandEnvOverrides("demo", map[string]any{requestKey: "request-value"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	matches := 0
+	observed := ""
+	for key, value := range overrides {
+		if strings.EqualFold(key, skillKey) {
+			matches++
+			observed = value
+		}
+	}
+	if matches != 1 {
+		t.Fatalf("case-insensitive override count = %d, want 1: %#v", matches, overrides)
+	}
+	if observed != "request-value" {
+		t.Fatalf("request override = %q, want request-value", observed)
 	}
 }
 
@@ -81,16 +179,10 @@ func TestCommandEnvPreservesWindowsHostEnvironment(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	values := map[string]string{}
-	for _, entry := range got {
-		key, value, ok := strings.Cut(entry, "=")
-		if ok {
-			values[key] = value
-		}
-	}
 	for key, expected := range want {
-		if values[key] != expected {
-			t.Fatalf("%s = %q, want %q", key, values[key], expected)
+		value, ok := windowsEnvironmentValue(got, key)
+		if !ok || value != expected {
+			t.Fatalf("%s = %q, want %q", key, value, expected)
 		}
 	}
 }
@@ -127,10 +219,19 @@ func TestCommandEnvDoesNotInventHomeFromUserProfileWhenParentHomeMissing(t *test
 	if err != nil {
 		t.Fatal(err)
 	}
-	values := formattedCommandEnvironment(got)
-	if values["HOME"] != "" {
-		t.Fatalf("HOME was invented as %q", values["HOME"])
+	if value, ok := windowsEnvironmentValue(got, "HOME"); ok && value != "" {
+		t.Fatalf("HOME was invented as %q", value)
 	}
+}
+
+func windowsEnvironmentValue(environment []string, name string) (string, bool) {
+	for _, entry := range environment {
+		key, value, ok := strings.Cut(entry, "=")
+		if ok && strings.EqualFold(key, name) {
+			return value, true
+		}
+	}
+	return "", false
 }
 
 func TestCommandEnvKeepsParentPathUsableByChild(t *testing.T) {
