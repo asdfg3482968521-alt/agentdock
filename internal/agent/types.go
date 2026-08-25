@@ -82,6 +82,7 @@ type ManagerOptions struct {
 	Sessions    SessionResolver
 	Credentials credential.Resolver
 	Providers   map[string]ProviderAdapter
+	Backends    map[string]AgentBackend
 	Tools       ToolBridge
 	Limits      AgentLimits
 	Now         func() time.Time
