@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"time"
 
+	"github.com/uvwt/agentdock/internal/envstore"
 	"github.com/uvwt/agentdock/internal/tool/command/session"
 )
 
@@ -396,19 +397,10 @@ func (svc *Service) internalCommandEnv(extra map[string]string) ([]string, error
 }
 
 func (svc *Service) baseCommandEnv() (map[string]string, error) {
-	env := map[string]string{}
-	for _, key := range []string{"PATH", "LANG", "LC_ALL", "SSL_CERT_FILE", "SSL_CERT_DIR", "SYSTEMROOT", "WINDIR", "COMSPEC", "PATHEXT", "TEMP", "TMP", "WSLENV", "PROGRAMFILES", "PROGRAMW6432"} {
-		if value := os.Getenv(key); value != "" {
-			env[key] = value
-		}
-	}
+	env := envstore.InheritedEnv()
 	env["AGENTDOCK_HOME"] = svc.config().AgentDockHome
 	env["AGENTDOCK_DEFAULT_DIR"] = svc.config().AgentDockDefaultDir
-	hostHome := ""
-	if resolvedHome, err := os.UserHomeDir(); err == nil && resolvedHome != "" {
-		hostHome = resolvedHome
-		env["HOME"] = resolvedHome
-	}
+	hostHome := env["HOME"]
 	// macOS 的 launchd 默认只提供系统 PATH。命令工具需要补齐常见用户级可执行目录，
 	// 否则 Homebrew、~/.local/bin 中已安装的 CLI 在桌面服务里会表现为“未安装”。
 	if commandPath := platformCommandPath(env["PATH"], hostHome); commandPath != "" {
