@@ -665,6 +665,13 @@ func cloneRecord(record Record) Record {
 	copy.RuntimeID = cloneString(record.RuntimeID)
 	copy.ClientTag = cloneString(record.ClientTag)
 	copy.FailureReason = cloneString(record.FailureReason)
+	copy.NativeSessionBindings = make(map[string]NativeSessionBinding, len(record.NativeSessionBindings))
+	for key, binding := range record.NativeSessionBindings {
+		copy.NativeSessionBindings[key] = cloneNativeSessionBinding(binding)
+	}
+	if record.NativeSessionBindings == nil {
+		copy.NativeSessionBindings = nil
+	}
 	copy.JobIDs = append([]string(nil), record.JobIDs...)
 	if copy.JobIDs == nil {
 		copy.JobIDs = []string{}

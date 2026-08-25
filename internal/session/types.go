@@ -34,23 +34,24 @@ const (
 )
 
 type Record struct {
-	SessionID       string        `json:"session_id"`
-	ProjectID       string        `json:"project_id"`
-	RepoRoot        string        `json:"repo_root"`
-	WorkspaceType   WorkspaceType `json:"workspace_type"`
-	IsolationMode   IsolationMode `json:"isolation_mode"`
-	BaseRef         *string       `json:"base_ref"`
-	Branch          *string       `json:"branch"`
-	Worktree        *string       `json:"worktree"`
-	PermissionMode  string        `json:"permission_mode"`
-	RuntimeID       *string       `json:"runtime_id"`
-	JobIDs          []string      `json:"job_ids"`
-	ClientTag       *string       `json:"client_tag"`
-	CreatedAt       time.Time     `json:"created_at"`
-	LastActiveAt    time.Time     `json:"last_active_at"`
-	State           State         `json:"state"`
-	FailureReason   *string       `json:"failure_reason"`
-	MetadataVersion string        `json:"metadata_version"`
+	SessionID             string                          `json:"session_id"`
+	ProjectID             string                          `json:"project_id"`
+	RepoRoot              string                          `json:"repo_root"`
+	WorkspaceType         WorkspaceType                   `json:"workspace_type"`
+	IsolationMode         IsolationMode                   `json:"isolation_mode"`
+	BaseRef               *string                         `json:"base_ref"`
+	Branch                *string                         `json:"branch"`
+	Worktree              *string                         `json:"worktree"`
+	PermissionMode        string                          `json:"permission_mode"`
+	RuntimeID             *string                         `json:"runtime_id"`
+	JobIDs                []string                        `json:"job_ids"`
+	ClientTag             *string                         `json:"client_tag"`
+	CreatedAt             time.Time                       `json:"created_at"`
+	LastActiveAt          time.Time                       `json:"last_active_at"`
+	State                 State                           `json:"state"`
+	FailureReason         *string                         `json:"failure_reason"`
+	MetadataVersion       string                          `json:"metadata_version"`
+	NativeSessionBindings map[string]NativeSessionBinding `json:"native_session_bindings,omitempty"`
 }
 
 func (r Record) Workspace() string {

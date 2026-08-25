@@ -70,6 +70,9 @@ func (p *persistence) loadAll() ([]Record, error) {
 		if record.JobIDs == nil {
 			record.JobIDs = []string{}
 		}
+		if record.NativeSessionBindings == nil {
+			record.NativeSessionBindings = map[string]NativeSessionBinding{}
+		}
 		result = append(result, record)
 	}
 	return result, nil
