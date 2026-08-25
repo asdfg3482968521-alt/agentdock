@@ -1,0 +1,299 @@
+name: C2.5 M-C Revised Validation
+
+on:
+  push:
+    branches:
+      - phase-c2.5-m-c-revised-validation-aeecfb6
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  CANDIDATE_SHA: aeecfb652d9e4b1014cd81e7e486468834a8a66a
+  M_BASE_SHA: b2231c62a96bd87e99373a07f1f3e1ace6223ae9
+  M_A_SHA: d47e144bc78d21870d6060ac3749fc99a33e87e0
+  M_B_SHA: 1c6024717926640523126a20ddab660420346c48
+  GOMAXPROCS: '2'
+  GOTOOLCHAIN: local
+
+jobs:
+  reliability-and-owned:
+    name: Reliability and M-owned Windows gates
+    runs-on: windows-latest
+    steps:
+      - name: Checkout exact candidate
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.CANDIDATE_SHA }}
+          fetch-depth: 0
+
+      - name: Setup Go
+        uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Exact candidate parents
+        shell: pwsh
+        run: |
+          $head = (git rev-parse HEAD).Trim()
+          if ($head -ne $env:CANDIDATE_SHA) { throw "HEAD=$head want=$env:CANDIDATE_SHA" }
+          $parents = ((git show -s --format=%P HEAD).Trim() -split ' ')
+          if ($parents.Count -ne 2) { throw "candidate parent count=$($parents.Count), want 2" }
+          if ($parents[0] -ne $env:M_A_SHA) { throw "parent[0]=$($parents[0]) want A=$env:M_A_SHA" }
+          if ($parents[1] -ne $env:M_B_SHA) { throw "parent[1]=$($parents[1]) want revised B=$env:M_B_SHA" }
+
+      - name: Control plane 20 of 20
+        shell: pwsh
+        run: go test -p=1 ./internal/mcp -run '^TestControlPlaneSurvivesUnavailableOpenCodeSupervisor$' -count=1
+
+      - name: Request containment and restart stability
+        shell: pwsh
+        run: go test -p=1 ./internal/mcp -run '^(TestToolRequestPanicIsContainedAtMCPBoundary|TestCancelledRequestDoesNotCorruptNextRequest|TestServerRestartPreservesPublicToolSchema)$' -count=1
+
+      - name: Revised Windows env identity and no-invention gates
+        shell: pwsh
+        run: |
+          go test -p=1 ./internal/envstore -run '^(TestMergeUsesPlatformEnvironmentKeyIdentity|TestMinimalSystemEnvDoesNotInventWindowsProfileOrToolchainPaths|TestMinimalSystemEnvPreservesExistingWindowsProfilePaths)$' -count=1
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          go test -p=1 ./internal/tool/command -run '^(TestCommandEnv|TestInternalCommandEnv)' -count=1
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          go test -p=1 ./internal/mcp/client -run '^(TestStdioEnvironment|TestStdioSpawnFailure)' -count=1
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Process ownership and spawn isolation gates
+        shell: pwsh
+        run: |
+          go test -p=1 ./internal/process -run '^TestWindowsJobObject' -count=1
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          go test -p=1 ./internal/mcp/client -run '^TestStdioSpawnFailureDoesNotExposeEnvironmentOrCorruptNextSpawn$' -count=1
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Capability 24 of 24 and agent schema 6 of 6
+        shell: pwsh
+        run: go test -p=1 ./internal/app -run '^TestD2AgentRegistryMatchesFrozenBFinalSchemasAnd24TargetTools$' -count=1
+
+      - name: M-owned package regression literal pass
+        shell: pwsh
+        run: |
+          $packages = @(
+            './internal/mcp',
+            './internal/app',
+            './internal/envstore',
+            './internal/tool/command',
+            './internal/mcp/client',
+            './internal/process',
+            './internal/opencode'
+          )
+          $failed = @()
+          foreach ($pkg in $packages) {
+            Write-Host "=== $pkg ==="
+            & go test -p=1 $pkg -count=1
+            if ($LASTEXITCODE -ne 0) { $failed += $pkg }
+          }
+          if ($failed.Count -ne 0) {
+            Write-Error ("M-owned package failures: " + ($failed -join ', '))
+            exit 1
+          }
+
+  behavior-differential:
+    name: Behavior differential versus exact M base
+    runs-on: windows-latest
+    steps:
+      - name: Checkout exact candidate
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.CANDIDATE_SHA }}
+          fetch-depth: 0
+
+      - name: Setup Go
+        uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Compare agent job session failure sets
+        shell: pwsh
+        run: |
+          $candidateRoot = (Get-Location).Path
+          $baseRoot = Join-Path (Split-Path $candidateRoot -Parent) 'm-base-behavior'
+          git worktree add --detach $baseRoot $env:M_BASE_SHA
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+          function Invoke-GoSuite([string]$root, [string[]]$packages, [string]$label) {
+            Push-Location $root
+            $lines = @(& go test -json -p=1 @packages -count=1 2>&1)
+            $exitCode = $LASTEXITCODE
+            Pop-Location
+            $fails = @()
+            foreach ($line in $lines) {
+              try { $obj = $line | ConvertFrom-Json -ErrorAction Stop } catch { continue }
+              if ($obj.Action -eq 'fail') {
+                if ($obj.Test) { $fails += "$($obj.Package)::$($obj.Test)" }
+                elseif ($obj.Package) { $fails += "$($obj.Package)::<package>" }
+              }
+            }
+            $fails = @($fails | Sort-Object -Unique)
+            $lines | Set-Content -Path (Join-Path $candidateRoot "$label.json.log")
+            return [pscustomobject]@{ ExitCode = $exitCode; Fails = $fails }
+          }
+
+          $packages = @('./internal/agent','./internal/job','./internal/session')
+          $candidate = Invoke-GoSuite $candidateRoot $packages 'candidate-behavior'
+          $baseline = Invoke-GoSuite $baseRoot $packages 'baseline-behavior'
+
+          Write-Host "candidate failures: $($candidate.Fails -join ', ')"
+          Write-Host "baseline failures: $($baseline.Fails -join ', ')"
+          $new = @($candidate.Fails | Where-Object { $_ -notin $baseline.Fails })
+          if ($candidate.ExitCode -ne 0 -and $baseline.ExitCode -eq 0) {
+            throw 'candidate behavior suite failed while baseline passed'
+          }
+          if ($new.Count -ne 0) {
+            throw ("candidate-only behavior failures: " + ($new -join ', '))
+          }
+          Write-Host 'NO_NEW_BEHAVIOR_FAILURES_VS_M_BASE=YES'
+
+  hosted-full-differential:
+    name: Hosted Windows full differential
+    runs-on: windows-latest
+    steps:
+      - name: Checkout exact candidate
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.CANDIDATE_SHA }}
+          fetch-depth: 0
+
+      - name: Setup Go
+        uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Candidate and baseline full regression differential
+        shell: pwsh
+        run: |
+          $candidateRoot = (Get-Location).Path
+          $baseRoot = Join-Path (Split-Path $candidateRoot -Parent) 'm-base-full'
+          git worktree add --detach $baseRoot $env:M_BASE_SHA
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+          function Invoke-GoFull([string]$root, [string]$label) {
+            Push-Location $root
+            $lines = @(& go test -json -p=1 ./... -count=1 2>&1)
+            $exitCode = $LASTEXITCODE
+            Pop-Location
+            $fails = @()
+            foreach ($line in $lines) {
+              try { $obj = $line | ConvertFrom-Json -ErrorAction Stop } catch { continue }
+              if ($obj.Action -eq 'fail') {
+                if ($obj.Test) { $fails += "$($obj.Package)::$($obj.Test)" }
+                elseif ($obj.Package) { $fails += "$($obj.Package)::<package>" }
+              }
+            }
+            $fails = @($fails | Sort-Object -Unique)
+            $lines | Set-Content -Path (Join-Path $candidateRoot "$label.json.log")
+            return [pscustomobject]@{ ExitCode = $exitCode; Fails = $fails }
+          }
+
+          $candidate = Invoke-GoFull $candidateRoot 'candidate-full'
+          $baseline = Invoke-GoFull $baseRoot 'baseline-full'
+          Write-Host "candidate full exit=$($candidate.ExitCode)"
+          Write-Host "baseline full exit=$($baseline.ExitCode)"
+          Write-Host "candidate failures: $($candidate.Fails -join ', ')"
+          Write-Host "baseline failures: $($baseline.Fails -join ', ')"
+
+          $new = @($candidate.Fails | Where-Object { $_ -notin $baseline.Fails })
+          if ($candidate.ExitCode -ne 0 -and $baseline.ExitCode -eq 0) {
+            throw 'candidate full regression failed while exact baseline passed'
+          }
+          if ($new.Count -ne 0) {
+            throw ("candidate-only full-regression failures: " + ($new -join ', '))
+          }
+          if ($candidate.ExitCode -eq 0) { Write-Host 'HOSTED_CANDIDATE_FULL_REGRESSION=PASS' }
+          else { Write-Host 'HOSTED_CANDIDATE_FULL_REGRESSION=PRE_EXISTING_FAILURES_ONLY' }
+          Write-Host 'NO_NEW_FAILURES_VS_M_BASE=YES'
+
+  nonwindows-semantics:
+    name: Non-Windows merge semantics
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout exact candidate
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.CANDIDATE_SHA }}
+
+      - name: Setup Go
+        uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Relevant package regression
+        shell: bash
+        run: |
+          set -euo pipefail
+          GOMAXPROCS=2 go test -p=1 ./internal/envstore ./internal/tool/command ./internal/mcp/client ./internal/process -count=1
+
+  hygiene:
+    name: Independent diff and secret hygiene
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout exact candidate
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.CANDIDATE_SHA }}
+          fetch-depth: 0
+
+      - name: Diff check
+        shell: bash
+        run: |
+          set -euo pipefail
+          git diff --check "$M_BASE_SHA" "$CANDIDATE_SHA"
+
+      - name: Exact changed-file set
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat > expected.txt <<'EOF'
+          internal/app/runtime.go
+          internal/envstore/env.go
+          internal/envstore/env_merge_test.go
+          internal/envstore/env_windows.go
+          internal/envstore/env_windows_test.go
+          internal/mcp/client/environment_test.go
+          internal/mcp/client/environment_windows_test.go
+          internal/mcp/client/protocol.go
+          internal/mcp/reliability_test.go
+          internal/mcp/server.go
+          internal/process/process_windows_test.go
+          internal/tool/command/command.go
+          internal/tool/command/command_env_test.go
+          internal/tool/command/command_env_windows_test.go
+          internal/tool/command/command_invocation.go
+          internal/tool/command/session/session_windows_test.go
+          EOF
+          sed -i 's/^          //' expected.txt
+          sort -o expected.txt expected.txt
+          git diff --name-only "$M_BASE_SHA" "$CANDIDATE_SHA" | sort > actual.txt
+          diff -u expected.txt actual.txt
+
+      - name: No broad taskkill and no machine residue in candidate diff
+        shell: bash
+        run: |
+          set -euo pipefail
+          if git grep -n -i -E 'taskkill.*(/IM|-IM).*(node|bun)\.exe' "$CANDIDATE_SHA" -- .; then
+            echo 'forbidden broad taskkill found'
+            exit 1
+          fi
+          git diff "$M_BASE_SHA" "$CANDIDATE_SHA" > candidate.diff
+          if grep -E -n 'E:\\(Personal|AI_Code)|C:\\Users\\[^[:space:]]+|gh[pousr]_[A-Za-z0-9]{20,}|sk-[A-Za-z0-9]{20,}|BEGIN (RSA |EC |OPENSSH )?PRIVATE KEY' candidate.diff; then
+            echo 'machine-specific path or credential-like material found in diff'
+            exit 1
+          fi
+
+      - name: Candidate source checkout clean
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -z "$(git status --porcelain)"
