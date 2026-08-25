@@ -134,6 +134,18 @@ func NewRuntime(cfg config.Config) (*Runtime, error) {
 		return nil, fmt.Errorf("initialize credential store: %w", err)
 	}
 	runtime.credentialStore = credentialStore
+	agentBackends := map[string]agentruntime.AgentBackend{}
+	if runtime.openCode != nil {
+		opencodeBackend, backendErr := newOpenCodeAgentBackend(runtime.openCode, func(sessionID, runtimeScope string) error {
+			_, bindErr := runtime.sessions.SetRuntime(sessionID, runtimeScope)
+			return bindErr
+		})
+		if backendErr != nil {
+			_ = runtime.Close()
+			return nil, fmt.Errorf("initialize OpenCode Agent backend: %w", backendErr)
+		}
+		agentBackends["opencode"] = opencodeBackend
+	}
 	agentManager, err := agentruntime.NewManager(context.Background(), agentruntime.ManagerOptions{
 		StorageRoot: filepath.Join(cfg.AgentDockHome, "agents"),
 		Sessions:    newAgentSessionResolver(runtime),
@@ -142,8 +154,9 @@ func NewRuntime(cfg config.Config) (*Runtime, error) {
 			"anthropic": agentruntime.NewAnthropicProvider(agentruntime.ProviderHTTPOptions{}),
 			"deepseek":  agentruntime.NewDeepSeekProvider(agentruntime.ProviderHTTPOptions{}),
 		},
-		Tools:  newAgentToolBridge(runtime),
-		Limits: agentruntime.DefaultAgentLimits(),
+		Backends: agentBackends,
+		Tools:    newAgentToolBridge(runtime),
+		Limits:   agentruntime.DefaultAgentLimits(),
 	})
 	if err != nil {
 		_ = runtime.Close()

@@ -79,6 +79,31 @@ type AgentBackend interface {
 	Run(context.Context, BackendRequest, func(BackendEvent) error) (BackendResult, error)
 }
 
+type BackendIdentity string
+
+const (
+	BackendIdentityProvider BackendIdentity = "provider"
+	BackendIdentityOpenCode BackendIdentity = "opencode"
+)
+
+// AgentBackendMetadata is an optional execution-policy description. Backends
+// that do not implement it preserve the legacy provider semantics.
+type AgentBackendMetadata interface {
+	BackendIdentity() BackendIdentity
+	RequiresCredential() bool
+}
+
+func backendMetadata(backend AgentBackend) (BackendIdentity, bool) {
+	if metadata, ok := backend.(AgentBackendMetadata); ok {
+		identity := metadata.BackendIdentity()
+		if identity == "" {
+			identity = BackendIdentityProvider
+		}
+		return identity, metadata.RequiresCredential()
+	}
+	return BackendIdentityProvider, true
+}
+
 // ProviderBackend adapts the existing ProviderAdapter contract to AgentBackend
 // without changing provider request or result semantics.
 type ProviderBackend struct {
@@ -88,6 +113,9 @@ type ProviderBackend struct {
 func NewProviderBackend(provider ProviderAdapter) *ProviderBackend {
 	return &ProviderBackend{provider: provider}
 }
+
+func (b *ProviderBackend) BackendIdentity() BackendIdentity { return BackendIdentityProvider }
+func (b *ProviderBackend) RequiresCredential() bool         { return true }
 
 func (b *ProviderBackend) ResolveModel(raw string) (string, error) {
 	return resolveProviderModel(b.provider, raw)

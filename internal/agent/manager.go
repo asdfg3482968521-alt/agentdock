@@ -153,6 +153,7 @@ func (m *Manager) Start(ctx context.Context, request StartRequest) (Record, erro
 	if backend == nil {
 		return Record{}, ErrProviderUnsupported
 	}
+	backendIdentity, _ := backendMetadata(backend)
 	resolvedModel, err := backend.ResolveModel(request.Model)
 	if err != nil {
 		return Record{}, err
@@ -200,7 +201,7 @@ func (m *Manager) Start(ctx context.Context, request StartRequest) (Record, erro
 	now := m.options.Now().UTC()
 	record := Record{
 		AgentID: id, SessionID: request.SessionID, Workspace: binding.Workspace, RuntimeScope: binding.RuntimeScope,
-		PermissionMode: permission, Provider: request.Provider, Model: request.Model, ResolvedModel: request.Model,
+		PermissionMode: permission, Provider: request.Provider, Backend: backendIdentity, Model: request.Model, ResolvedModel: request.Model,
 		Role: request.Role, CredentialRef: request.CredentialRef, TimeoutMS: request.Timeout.Milliseconds(),
 		Budget: AgentBudget{MaxRequests: request.MaxRequests}, MaxRequests: request.MaxRequests,
 		State: AgentStateQueued, CreatedAt: now, UpdatedAt: now,
@@ -362,13 +363,22 @@ func (m *Manager) runAgent(ctx context.Context, id string) {
 	m.mu.Unlock()
 	_ = m.persistence.save(record)
 
-	secret, err := m.options.Credentials.Resolve(ctx, request.CredentialRef)
-	if err != nil {
-		m.finishAgent(id, AgentStateFailed, ProviderResult{}, err, nil)
+	backend := m.backends[request.Provider]
+	if backend == nil {
+		m.finishAgent(id, AgentStateFailed, ProviderResult{}, ErrProviderUnsupported, nil)
 		return
 	}
-	defer credential.Zero(secret)
-	backend := m.backends[request.Provider]
+	var secret credential.Secret
+	_, requiresCredential := backendMetadata(backend)
+	if requiresCredential {
+		var err error
+		secret, err = m.options.Credentials.Resolve(ctx, request.CredentialRef)
+		if err != nil {
+			m.finishAgent(id, AgentStateFailed, ProviderResult{}, err, nil)
+			return
+		}
+		defer credential.Zero(secret)
+	}
 	messages := make([]ProviderMessage, 0)
 	prompt := request.Prompt
 	var lastResult ProviderResult
@@ -946,6 +956,9 @@ func (m *Manager) recover() error {
 		return err
 	}
 	for _, record := range records {
+		if record.Backend == "" {
+			record.Backend = BackendIdentityProvider
+		}
 		now := m.options.Now().UTC()
 		recovered := recoveredAgentState(record.State)
 		if recovered != record.State {
