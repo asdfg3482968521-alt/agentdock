@@ -3,6 +3,7 @@ package envstore
 import (
 	"os"
 	"sort"
+	"strings"
 )
 
 var minimalSystemKeys = []string{
@@ -32,6 +33,20 @@ func MinimalSystemEnv() map[string]string {
 		env["TMPDIR"] = os.TempDir()
 	}
 	completePlatformEnv(env)
+	return env
+}
+
+// InheritedEnv snapshots the current AgentDock process environment for a child
+// process. Callers may then apply only the overrides owned by that spawn path.
+func InheritedEnv() map[string]string {
+	env := make(map[string]string)
+	for _, entry := range os.Environ() {
+		key, value, ok := strings.Cut(entry, "=")
+		if !ok || key == "" {
+			continue
+		}
+		env[key] = value
+	}
 	return env
 }
 

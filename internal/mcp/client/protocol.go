@@ -253,7 +253,7 @@ func jsonObject(value any) (map[string]any, error) {
 }
 
 func stdioEnvironment(cfg ServerConfig) ([]string, error) {
-	environment := envstore.MinimalSystemEnv()
+	environment := envstore.InheritedEnv()
 	for childName, hostName := range cfg.EnvFromEnv {
 		value, ok := os.LookupEnv(hostName)
 		if !ok {
@@ -267,7 +267,7 @@ func stdioEnvironment(cfg ServerConfig) ([]string, error) {
 		}
 		environment[childName] = value
 	}
-	// 独立 MCP 环境文件属于该服务的明确配置，覆盖最小系统环境和 env_from_env 映射。
+	// 独立 MCP 环境文件属于该服务的明确配置，覆盖 parent environment 和 env_from_env 映射。
 	for key, value := range cfg.RuntimeEnv {
 		environment[key] = value
 	}

@@ -68,3 +68,49 @@ func TestWindowsJobObjectTerminatesAttachedProcess(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+func TestWindowsJobObjectDoesNotTerminateUnrelatedProcess(t *testing.T) {
+	unrelated := exec.Command("powershell.exe", "-NoLogo", "-NoProfile", "-NonInteractive", "-Command", "Start-Sleep -Seconds 30")
+	if err := unrelated.Start(); err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		_ = unrelated.Process.Kill()
+		_ = unrelated.Wait()
+	}()
+
+	owned := exec.Command("powershell.exe", "-NoLogo", "-NoProfile", "-NonInteractive", "-Command", "Start-Sleep -Seconds 30")
+	if err := owned.Start(); err != nil {
+		t.Fatal(err)
+	}
+	controller, err := Attach(owned)
+	if err != nil {
+		_ = owned.Process.Kill()
+		_ = owned.Wait()
+		t.Fatal(err)
+	}
+	defer controller.Close()
+	if err := controller.Terminate(); err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan error, 1)
+	go func() { done <- owned.Wait() }()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("owned process did not terminate")
+	}
+
+	handle, err := windows.OpenProcess(windows.SYNCHRONIZE, false, uint32(unrelated.Process.Pid))
+	if err != nil {
+		t.Fatalf("unrelated process is no longer queryable: %v", err)
+	}
+	defer windows.CloseHandle(handle)
+	state, err := windows.WaitForSingleObject(handle, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if state != uint32(windows.WAIT_TIMEOUT) {
+		t.Fatalf("unrelated process unexpectedly terminated, wait state=%d", state)
+	}
+}

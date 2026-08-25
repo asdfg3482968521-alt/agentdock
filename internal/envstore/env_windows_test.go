@@ -2,12 +2,9 @@
 
 package envstore
 
-import (
-	"path/filepath"
-	"testing"
-)
+import "testing"
 
-func TestMinimalSystemEnvCompletesWindowsProfilePaths(t *testing.T) {
+func TestMinimalSystemEnvDoesNotInventWindowsProfileOrToolchainPaths(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	t.Setenv("USERPROFILE", "")
@@ -19,18 +16,32 @@ func TestMinimalSystemEnvCompletesWindowsProfilePaths(t *testing.T) {
 	t.Setenv("TMP", "")
 
 	environment := MinimalSystemEnv()
-	checks := map[string]string{
-		"USERPROFILE":  home,
-		"APPDATA":      filepath.Join(home, "AppData", "Roaming"),
-		"LOCALAPPDATA": filepath.Join(home, "AppData", "Local"),
-		"GOPATH":       filepath.Join(home, "go"),
-		"GOMODCACHE":   filepath.Join(home, "go", "pkg", "mod"),
-		"TEMP":         filepath.Join(home, "AppData", "Local", "Temp"),
-		"TMP":          filepath.Join(home, "AppData", "Local", "Temp"),
+	for _, key := range []string{"USERPROFILE", "APPDATA", "LOCALAPPDATA", "GOPATH", "GOMODCACHE"} {
+		if value := environment[key]; value != "" {
+			t.Fatalf("%s was invented as %q", key, value)
+		}
 	}
-	for key, expected := range checks {
+	if environment["HOME"] != home {
+		t.Fatalf("HOME = %q, want parent value %q", environment["HOME"], home)
+	}
+}
+
+func TestMinimalSystemEnvPreservesExistingWindowsProfilePaths(t *testing.T) {
+	root := t.TempDir()
+	want := map[string]string{
+		"USERPROFILE":  root + `\profile`,
+		"APPDATA":      root + `\roaming`,
+		"LOCALAPPDATA": root + `\local`,
+		"TEMP":         root + `\temp`,
+		"TMP":          root + `\tmp`,
+	}
+	for key, value := range want {
+		t.Setenv(key, value)
+	}
+	environment := MinimalSystemEnv()
+	for key, expected := range want {
 		if environment[key] != expected {
-			t.Fatalf("%s = %q, want %q", key, environment[key], expected)
+			t.Fatalf("%s = %q, want parent value %q", key, environment[key], expected)
 		}
 	}
 }
