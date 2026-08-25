@@ -1,0 +1,31 @@
+name: C2.5 M-C Baseline Differential
+
+on:
+  push:
+    branches:
+      - phase-c2.5-m-c-baseline-validation
+
+permissions:
+  contents: read
+
+jobs:
+  baseline:
+    runs-on: windows-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Focused baseline packages
+        shell: pwsh
+        run: |
+          $env:GOMAXPROCS='2'
+          go test -p=1 ./internal/mcp ./internal/app ./internal/envstore ./internal/tool/command ./internal/mcp/client ./internal/process ./internal/agent ./internal/job ./internal/session ./internal/opencode -count=1
+      - name: Full baseline regression
+        if: always()
+        shell: pwsh
+        run: |
+          $env:GOMAXPROCS='2'
+          go test -p=1 ./... -count=1
