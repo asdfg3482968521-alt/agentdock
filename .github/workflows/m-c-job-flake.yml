@@ -1,0 +1,53 @@
+name: C2.5 M-C Job Cleanup Differential
+
+on:
+  push:
+    branches:
+      - phase-c2.5-m-c-job-flake-aeecfb6
+
+permissions:
+  contents: read
+
+env:
+  CANDIDATE_SHA: aeecfb652d9e4b1014cd81e7e486468834a8a66a
+  M_BASE_SHA: b2231c62a96bd87e99373a07f1f3e1ace6223ae9
+  GOMAXPROCS: '2'
+  GOTOOLCHAIN: local
+
+jobs:
+  classify:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.CANDIDATE_SHA }}
+          fetch-depth: 0
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Targeted candidate and baseline reruns
+        shell: pwsh
+        run: |
+          $candidateRoot = (Get-Location).Path
+          $baseRoot = Join-Path (Split-Path $candidateRoot -Parent) 'm-base-job-targeted'
+          git worktree add --detach $baseRoot $env:M_BASE_SHA
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $pattern = '^(TestAgentOwnedJobKnownSecretRedactsFailureCancelAndProgress|TestGlobalConcurrencyActuallyQueuesBeyondLimit)$'
+
+          function Invoke-Targeted([string]$root, [string]$label) {
+            Write-Host "===== $label ====="
+            Push-Location $root
+            & go test -v -p=1 ./internal/job -run $pattern -count=5
+            $code = $LASTEXITCODE
+            Pop-Location
+            Write-Host "$label exit=$code"
+            return $code
+          }
+
+          $candidateCode = Invoke-Targeted $candidateRoot 'candidate-targeted'
+          $baselineCode = Invoke-Targeted $baseRoot 'baseline-targeted'
+          Write-Host "TARGETED_CANDIDATE_EXIT=$candidateCode"
+          Write-Host "TARGETED_BASELINE_EXIT=$baselineCode"
+          # This job is diagnostic: the detailed Go output above is the classification evidence.
+          exit 0
