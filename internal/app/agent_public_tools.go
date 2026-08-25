@@ -4,12 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"strings"
 	"time"
 
 	agentruntime "github.com/uvwt/agentdock/internal/agent"
-	"github.com/uvwt/agentdock/internal/credential"
 	toolcore "github.com/uvwt/agentdock/internal/tool/core"
 )
 
@@ -31,15 +29,9 @@ func (r *Runtime) d2AgentStart(ctx context.Context, args map[string]any) (Result
 	}
 	provider := strings.ToLower(strings.TrimSpace(toolcore.StringArg(args, "provider", "")))
 	credentialRef := strings.TrimSpace(toolcore.StringArg(args, "credential_ref", ""))
-	if err := credential.ValidateRef(credentialRef); err != nil {
+	route := routeAgentBackend(provider)
+	if err := validateAgentStartCredential(ctx, r.credentialStore, route, provider, credentialRef); err != nil {
 		return nil, agentToolError(err)
-	}
-	metadata, err := r.credentialStore.Describe(ctx, credentialRef)
-	if err != nil {
-		return nil, agentToolError(err)
-	}
-	if metadata.Provider != provider {
-		return nil, agentToolError(fmt.Errorf("%w: credential_ref is bound to a different provider", credential.ErrInvalidRef))
 	}
 	model := ""
 	if raw, exists := args["model"]; exists && raw != nil {

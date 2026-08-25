@@ -91,3 +91,22 @@ func TestFrozenAgentStartSchemaForbidsPlaintextSecretsAndRoutingOverrides(t *tes
 		t.Fatalf("agent_start additionalProperties=%v", schema["additionalProperties"])
 	}
 }
+
+func TestC25OpenCodeProviderFitsFrozenAgentStartSchema(t *testing.T) {
+	args := map[string]any{
+		"session_id":     "session_c25_opencode",
+		"provider":       "opencode",
+		"model":          nil,
+		"role":           "worker",
+		"credential_ref": "cred_opencode_local",
+		"prompt":         "inspect repository",
+		"permission":     "read-only",
+		"timeout_ms":     30000,
+		"budget": map[string]any{
+			"max_requests": 1,
+		},
+	}
+	if err := validateFrozenAgentInput("agent_start", args); err != nil {
+		t.Fatalf("frozen agent_start must accept provider=opencode without a schema change: %v", err)
+	}
+}
