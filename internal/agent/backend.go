@@ -7,6 +7,45 @@ import (
 	"github.com/uvwt/agentdock/internal/credential"
 )
 
+const (
+	BackendErrorAuthFailure       = "AUTH_FAILURE"
+	BackendErrorRateLimited       = "RATE_LIMITED"
+	BackendErrorBadRequest        = "BAD_REQUEST"
+	BackendErrorUnavailable       = "PROVIDER_UNAVAILABLE"
+	BackendErrorTimeout           = "TIMEOUT"
+	BackendErrorCancelled         = "CANCELLED"
+	BackendErrorMalformedResponse = "MALFORMED_RESPONSE"
+	BackendErrorModelUnavailable  = "MODEL_UNAVAILABLE"
+	BackendErrorBudgetExceeded    = "BUDGET_EXCEEDED"
+	BackendErrorTool              = "TOOL_ERROR"
+)
+
+// BackendError lets non-provider backends return the same normalized failure
+// envelope as the legacy provider path without owning Agent lifecycle state.
+type BackendError struct {
+	Code         string
+	Retryable    bool
+	ProviderCode *string
+	Err          error
+}
+
+func (e *BackendError) Error() string {
+	if e == nil {
+		return ""
+	}
+	if e.Err != nil {
+		return e.Err.Error()
+	}
+	return e.Code
+}
+
+func (e *BackendError) Unwrap() error {
+	if e == nil {
+		return nil
+	}
+	return e.Err
+}
+
 // BackendRequest is the execution-only contract between Agent Manager and a
 // backend. Lifecycle, terminal state, persistence, ownership, and completion
 // publication remain Manager responsibilities.

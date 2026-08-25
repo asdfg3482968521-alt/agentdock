@@ -21,6 +21,19 @@ func AgentErrorFrom(err error, secret []byte) ErrorEnvelope {
 
 	code := "TOOL_ERROR"
 	retryable := false
+	var providerCode *string
+	var backendFailure *BackendError
+	if errors.As(err, &backendFailure) {
+		switch backendFailure.Code {
+		case BackendErrorAuthFailure, BackendErrorRateLimited, BackendErrorBadRequest,
+			BackendErrorUnavailable, BackendErrorTimeout, BackendErrorCancelled,
+			BackendErrorMalformedResponse, BackendErrorModelUnavailable,
+			BackendErrorBudgetExceeded, BackendErrorTool:
+			code = backendFailure.Code
+			retryable = backendFailure.Retryable
+			providerCode = backendFailure.ProviderCode
+		}
+	}
 	switch {
 	case errors.Is(err, ErrAgentNotFound):
 		code = "AGENT_NOT_FOUND"
@@ -55,6 +68,9 @@ func AgentErrorFrom(err error, secret []byte) ErrorEnvelope {
 	case errors.Is(err, ErrToolError):
 		code = "TOOL_ERROR"
 	default:
+		if backendFailure != nil && code != "TOOL_ERROR" {
+			break
+		}
 		switch providerErrorCode(err) {
 		case ProviderErrorModelUnavailable:
 			code = "MODEL_UNAVAILABLE"
@@ -77,5 +93,5 @@ func AgentErrorFrom(err error, secret []byte) ErrorEnvelope {
 	if strings.TrimSpace(message) == "" {
 		message = strings.ToLower(strings.ReplaceAll(code, "_", " "))
 	}
-	return ErrorEnvelope{Code: code, Message: message, Retryable: retryable}
+	return ErrorEnvelope{Code: code, Message: message, Retryable: retryable, ProviderCode: providerCode}
 }

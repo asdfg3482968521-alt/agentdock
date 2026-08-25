@@ -31,6 +31,7 @@ type managedAgent struct {
 type Manager struct {
 	options     ManagerOptions
 	persistence *agentPersistence
+	backends    map[string]AgentBackend
 	rootCtx     context.Context
 	rootCancel  context.CancelFunc
 
@@ -82,9 +83,22 @@ func NewManager(ctx context.Context, options ManagerOptions) (*Manager, error) {
 	if err != nil {
 		return nil, err
 	}
+	backends := make(map[string]AgentBackend, len(options.Providers)+len(options.Backends))
+	for name, provider := range options.Providers {
+		name = strings.ToLower(strings.TrimSpace(name))
+		if name != "" && provider != nil {
+			backends[name] = NewProviderBackend(provider)
+		}
+	}
+	for name, backend := range options.Backends {
+		name = strings.ToLower(strings.TrimSpace(name))
+		if name != "" && backend != nil {
+			backends[name] = backend
+		}
+	}
 	rootCtx, cancel := context.WithCancel(ctx)
 	manager := &Manager{
-		options: options, persistence: store, rootCtx: rootCtx, rootCancel: cancel,
+		options: options, persistence: store, backends: backends, rootCtx: rootCtx, rootCancel: cancel,
 		agents: map[string]*managedAgent{}, activeProvider: map[string]int{}, activeSession: map[string]int{},
 	}
 	if err := manager.recover(); err != nil {
@@ -135,11 +149,11 @@ func (m *Manager) Start(ctx context.Context, request StartRequest) (Record, erro
 	if err := credential.ValidateRef(request.CredentialRef); err != nil {
 		return Record{}, err
 	}
-	provider := m.options.Providers[request.Provider]
-	if provider == nil {
+	backend := m.backends[request.Provider]
+	if backend == nil {
 		return Record{}, ErrProviderUnsupported
 	}
-	resolvedModel, err := resolveProviderModel(provider, request.Model)
+	resolvedModel, err := backend.ResolveModel(request.Model)
 	if err != nil {
 		return Record{}, err
 	}
@@ -354,7 +368,7 @@ func (m *Manager) runAgent(ctx context.Context, id string) {
 		return
 	}
 	defer credential.Zero(secret)
-	provider := m.options.Providers[request.Provider]
+	backend := m.backends[request.Provider]
 	messages := make([]ProviderMessage, 0)
 	prompt := request.Prompt
 	var lastResult ProviderResult
@@ -373,13 +387,14 @@ func (m *Manager) runAgent(ctx context.Context, id string) {
 		if m.options.Tools != nil {
 			tools = m.options.Tools.Tools(record.PermissionMode)
 		}
-		providerRequest := ProviderRequest{
-			AgentID: id, SessionID: request.SessionID, Model: request.Model, Role: request.Role, Prompt: prompt,
-			Messages: messages, Tools: tools, Credential: secret, MaxTurns: request.MaxRequests,
+		backendRequest := BackendRequest{
+			AgentID: id, SessionID: request.SessionID, Workspace: record.Workspace, RuntimeScope: record.RuntimeScope,
+			PermissionMode: record.PermissionMode, Provider: request.Provider, Model: request.Model, Role: request.Role, Prompt: prompt,
+			Messages: messages, Tools: tools, Credential: secret, Budget: AgentBudget{MaxRequests: request.MaxRequests}, Timeout: request.Timeout,
 		}
 		var toolCalls []ToolCall
 		var assistantText strings.Builder
-		result, runErr := provider.Run(ctx, providerRequest, func(event ProviderEvent) error {
+		result, runErr := backend.Run(ctx, backendRequest, func(event BackendEvent) error {
 			if event.Text != "" {
 				assistantText.WriteString(event.Text)
 			}
