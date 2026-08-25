@@ -1,0 +1,80 @@
+name: C2.5 M-C Independent Hygiene
+
+on:
+  push:
+    branches:
+      - phase-c2.5-m-c-hygiene-aeecfb6
+
+permissions:
+  contents: read
+
+env:
+  CANDIDATE_SHA: aeecfb652d9e4b1014cd81e7e486468834a8a66a
+  M_BASE_SHA: b2231c62a96bd87e99373a07f1f3e1ace6223ae9
+
+jobs:
+  hygiene:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout exact candidate
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.CANDIDATE_SHA }}
+          fetch-depth: 0
+
+      - name: Candidate initially clean
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -z "$(git status --porcelain)"
+
+      - name: Diff check and exact changed files
+        shell: bash
+        run: |
+          set -euo pipefail
+          git diff --check "$M_BASE_SHA" "$CANDIDATE_SHA"
+          expected="$RUNNER_TEMP/m-c-expected.txt"
+          actual="$RUNNER_TEMP/m-c-actual.txt"
+          cat > "$expected" <<'EOF'
+          internal/app/runtime.go
+          internal/envstore/env.go
+          internal/envstore/env_merge_test.go
+          internal/envstore/env_windows.go
+          internal/envstore/env_windows_test.go
+          internal/mcp/client/environment_test.go
+          internal/mcp/client/environment_windows_test.go
+          internal/mcp/client/protocol.go
+          internal/mcp/reliability_test.go
+          internal/mcp/server.go
+          internal/process/process_windows_test.go
+          internal/tool/command/command.go
+          internal/tool/command/command_env_test.go
+          internal/tool/command/command_env_windows_test.go
+          internal/tool/command/command_invocation.go
+          internal/tool/command/session/session_windows_test.go
+          EOF
+          sed -i 's/^          //' "$expected"
+          sort -o "$expected" "$expected"
+          git diff --name-only "$M_BASE_SHA" "$CANDIDATE_SHA" | sort > "$actual"
+          diff -u "$expected" "$actual"
+
+      - name: Secret machine residue and broad taskkill scan
+        shell: bash
+        run: |
+          set -euo pipefail
+          if git grep -n -i -E 'taskkill.*(/IM|-IM).*(node|bun)\.exe' "$CANDIDATE_SHA" -- .; then
+            echo 'forbidden broad taskkill found'
+            exit 1
+          fi
+          diff_file="$RUNNER_TEMP/m-c-candidate.diff"
+          git diff "$M_BASE_SHA" "$CANDIDATE_SHA" > "$diff_file"
+          if grep -E -n 'E:\\(Personal|AI_Code)|C:\\Users\\[^[:space:]]+|gh[pousr]_[A-Za-z0-9]{20,}|sk-[A-Za-z0-9]{20,}|BEGIN (RSA |EC |OPENSSH )?PRIVATE KEY' "$diff_file"; then
+            echo 'machine-specific path or credential-like material found in diff'
+            exit 1
+          fi
+
+      - name: Candidate remains clean
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -z "$(git status --porcelain)"
