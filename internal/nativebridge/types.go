@@ -85,6 +85,7 @@ type NativeClient interface {
 	ListNativePermissions(context.Context, string) ([]opencodenative.PermissionRequest, error)
 	ReplyNativePermission(context.Context, string, string, opencodenative.PermissionReplyRequest) error
 	DiscoverNativeProviderModelMetadata(context.Context, string) (json.RawMessage, error)
+	DiscoverNativeModels(context.Context, string) (opencodenative.ModelDiscovery, error)
 }
 
 type Options struct {

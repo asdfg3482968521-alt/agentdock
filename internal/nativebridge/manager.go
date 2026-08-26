@@ -307,6 +307,18 @@ func (m *Manager) ProviderModelMetadata(ctx context.Context, sessionID, subagent
 	return result, nil
 }
 
+func (m *Manager) ModelDiscovery(ctx context.Context, sessionID, subagentID, workspace string) (opencodenative.ModelDiscovery, error) {
+	binding, _, err := m.Attach(ctx, sessionID, subagentID, workspace)
+	if err != nil {
+		return opencodenative.ModelDiscovery{}, err
+	}
+	result, err := m.native.DiscoverNativeModels(ctx, binding.Workspace)
+	if err != nil {
+		return opencodenative.ModelDiscovery{}, &Error{Code: ErrorNative, Message: "discover native models", Cause: err}
+	}
+	return result, nil
+}
+
 func (m *Manager) ObserveEvents(ctx context.Context, sessionID, subagentID, workspace string, onEvent func(opencodenative.NativeEvent, int64) error) error {
 	if onEvent == nil {
 		return &Error{Code: ErrorInvalid, Message: "event callback is required"}
