@@ -15,69 +15,127 @@ func supervisorMutationKey(agentDockSessionID, subagentID string) string {
 }
 
 func randomSupervisorMessageID() string {
-	return strings.Replace(randomSubagentID(), "subagent_", "supervisor_message_", 1)
+	return strings.Replace(randomSubagentID(), "subagent_", "msg_", 1)
 }
 
-func (m *Manager) SubmitSupervisorMessage(ctx context.Context, request SupervisorMessageRequest) (SupervisorMessageResult, error) {
+func normalizeSupervisorMessageRequest(request SupervisorMessageRequest) (SupervisorMessageRequest, error) {
 	request.AgentDockSessionID = strings.TrimSpace(request.AgentDockSessionID)
 	request.SubagentID = strings.TrimSpace(request.SubagentID)
 	request.Workspace = strings.TrimSpace(request.Workspace)
 	request.ClientMessageID = strings.TrimSpace(request.ClientMessageID)
 	request.Kind = strings.ToUpper(strings.TrimSpace(request.Kind))
 	if request.AgentDockSessionID == "" || request.SubagentID == "" || request.ClientMessageID == "" {
-		return SupervisorMessageResult{}, &Error{Code: ErrorInvalid, Message: "agentdock_session_id, subagent_id, and client_message_id are required"}
+		return SupervisorMessageRequest{}, &Error{Code: ErrorInvalid, Message: "agentdock_session_id, subagent_id, and client_message_id are required"}
 	}
 	if request.Kind != "TASK" && request.Kind != "FOLLOWUP" && request.Kind != "CORRECTION" {
-		return SupervisorMessageResult{}, &Error{Code: ErrorInvalid, Message: "supervisor message kind must be TASK, FOLLOWUP, or CORRECTION"}
+		return SupervisorMessageRequest{}, &Error{Code: ErrorInvalid, Message: "supervisor message kind must be TASK, FOLLOWUP, or CORRECTION"}
 	}
 	if !hasPromptContent(request.Prompt) {
-		return SupervisorMessageResult{}, &Error{Code: ErrorInvalid, Message: "supervisor message prompt requires non-empty text content"}
+		return SupervisorMessageRequest{}, &Error{Code: ErrorInvalid, Message: "supervisor message prompt requires non-empty text content"}
 	}
+	return request, nil
+}
 
-	release := m.acquireKey(supervisorMutationKey(request.AgentDockSessionID, request.SubagentID))
-	defer release()
-
-	binding, _, err := m.Attach(ctx, request.AgentDockSessionID, request.SubagentID, request.Workspace)
+func (m *Manager) SubmitSupervisorMessage(ctx context.Context, request SupervisorMessageRequest) (SupervisorMessageResult, error) {
+	request, err := normalizeSupervisorMessageRequest(request)
 	if err != nil {
 		return SupervisorMessageResult{}, err
 	}
-	if binding.State != session.NativeConversationActive {
-		return SupervisorMessageResult{}, &Error{Code: ErrorLost, Message: "supervisor message requires an ACTIVE native conversation"}
+	release := m.acquireKey(supervisorMutationKey(request.AgentDockSessionID, request.SubagentID))
+	defer release()
+	binding, prompt, result, err := m.admitSupervisorMessageLocked(ctx, request)
+	if err != nil || !result.Created {
+		return result, err
 	}
+	return m.dispatchSupervisorMessageLocked(ctx, binding, prompt, result)
+}
 
+func (m *Manager) SubmitSupervisorCorrection(ctx context.Context, request SupervisorMessageRequest, mode CorrectionMode) (OrderedCorrectionResult, error) {
+	mode = CorrectionMode(strings.ToLower(strings.TrimSpace(string(mode))))
+	if mode != CorrectionGraceful && mode != CorrectionForce {
+		return OrderedCorrectionResult{}, &Error{Code: ErrorInvalid, Message: "supervisor correction mode must be graceful or force"}
+	}
+	request.Kind = "CORRECTION"
+	request, err := normalizeSupervisorMessageRequest(request)
+	if err != nil {
+		return OrderedCorrectionResult{}, err
+	}
+	release := m.acquireKey(supervisorMutationKey(request.AgentDockSessionID, request.SubagentID))
+	defer release()
+
+	binding, prompt, messageResult, err := m.admitSupervisorMessageLocked(ctx, request)
+	if err != nil {
+		return OrderedCorrectionResult{}, err
+	}
+	result := OrderedCorrectionResult{
+		Mode:                    mode,
+		Message:                 messageResult,
+		OpenCodeSessionIDBefore: binding.OpenCodeSessionID,
+		OpenCodeSessionIDAfter:  binding.OpenCodeSessionID,
+		PreemptiveClaimed:       false,
+	}
+	if !messageResult.Created {
+		return result, nil
+	}
+	if mode == CorrectionForce {
+		if err := m.native.AbortNativeExecution(ctx, binding.Workspace, binding.OpenCodeSessionID); err != nil {
+			return OrderedCorrectionResult{}, &Error{Code: ErrorNative, Message: "force correction abort exact native root", Cause: err}
+		}
+		result.Aborted = true
+	}
+	messageResult, err = m.dispatchSupervisorMessageLocked(ctx, binding, prompt, messageResult)
+	if err != nil {
+		return OrderedCorrectionResult{}, err
+	}
+	result.Message = messageResult
+	after, _, err := m.Attach(ctx, binding.AgentDockSessionID, binding.SubagentID, binding.Workspace)
+	if err != nil {
+		return OrderedCorrectionResult{}, err
+	}
+	result.OpenCodeSessionIDAfter = after.OpenCodeSessionID
+	if result.OpenCodeSessionIDAfter != result.OpenCodeSessionIDBefore {
+		return OrderedCorrectionResult{}, &Error{Code: ErrorReconciliation, Message: "ordered correction changed exact OpenCode native root"}
+	}
+	return result, nil
+}
+
+func (m *Manager) admitSupervisorMessageLocked(ctx context.Context, request SupervisorMessageRequest) (session.NativeSessionBinding, opencodenative.PromptRequest, SupervisorMessageResult, error) {
+	binding, _, err := m.Attach(ctx, request.AgentDockSessionID, request.SubagentID, request.Workspace)
+	if err != nil {
+		return session.NativeSessionBinding{}, opencodenative.PromptRequest{}, SupervisorMessageResult{}, err
+	}
+	if binding.State != session.NativeConversationActive {
+		return session.NativeSessionBinding{}, opencodenative.PromptRequest{}, SupervisorMessageResult{}, &Error{Code: ErrorLost, Message: "supervisor message requires an ACTIVE native conversation"}
+	}
 	prompt := request.Prompt
 	prompt.MessageID = randomSupervisorMessageID()
 	payload, err := json.Marshal(prompt)
 	if err != nil {
-		return SupervisorMessageResult{}, &Error{Code: ErrorInvalid, Message: "encode durable supervisor prompt", Cause: err}
+		return session.NativeSessionBinding{}, opencodenative.PromptRequest{}, SupervisorMessageResult{}, &Error{Code: ErrorInvalid, Message: "encode durable supervisor prompt", Cause: err}
 	}
-	message, created, err := m.sessions.AdmitNativeSupervisorMessage(
-		binding.AgentDockSessionID,
-		binding.SubagentID,
-		request.ClientMessageID,
-		request.Kind,
-		prompt.MessageID,
-		payload,
-	)
+	message, created, err := m.sessions.AdmitNativeSupervisorMessage(binding.AgentDockSessionID, binding.SubagentID, request.ClientMessageID, request.Kind, prompt.MessageID, payload)
 	if err != nil {
-		return SupervisorMessageResult{}, m.authorityError("admit durable supervisor message", err)
+		return session.NativeSessionBinding{}, opencodenative.PromptRequest{}, SupervisorMessageResult{}, m.authorityError("admit durable supervisor message", err)
 	}
-	result := SupervisorMessageResult{
-		OpenCodeSessionID: binding.OpenCodeSessionID,
-		Message:           message,
-		Created:           created,
-	}
-	if !created {
-		return result, nil
-	}
-
+	result := SupervisorMessageResult{OpenCodeSessionID: binding.OpenCodeSessionID, Message: message, Created: created}
 	prompt.MessageID = message.SupervisorMessageID
+	return binding, prompt, result, nil
+}
+
+func (m *Manager) dispatchSupervisorMessageLocked(ctx context.Context, binding session.NativeSessionBinding, prompt opencodenative.PromptRequest, result SupervisorMessageResult) (SupervisorMessageResult, error) {
+	message := result.Message
 	if _, err := m.sessions.UpdateNativeSupervisorMessage(binding.AgentDockSessionID, binding.SubagentID, message.SupervisorMessageID, func(value *session.NativeSupervisorMessage) error {
 		value.State = session.NativeSupervisorDispatching
 		return nil
 	}); err != nil {
 		return SupervisorMessageResult{}, m.authorityError("persist supervisor message dispatch intent", err)
 	}
+	_, _ = m.sessions.UpdateNativeSessionBinding(binding.AgentDockSessionID, binding.SubagentID, func(value *session.NativeSessionBinding) error {
+		value.ExecutionState = session.NativeExecutionStarting
+		value.CurrentExecutionID = message.SupervisorMessageID
+		value.PendingSupervisorMessageID = message.SupervisorMessageID
+		return nil
+	})
 	if err := m.native.ContinueNativeConversation(ctx, binding.Workspace, binding.OpenCodeSessionID, prompt); err != nil {
 		return SupervisorMessageResult{}, &Error{Code: ErrorNative, Message: "submit ordered same-session supervisor message", Cause: err}
 	}
@@ -91,6 +149,9 @@ func (m *Manager) SubmitSupervisorMessage(ctx context.Context, request Superviso
 	}
 	_, _ = m.sessions.UpdateNativeSessionBinding(binding.AgentDockSessionID, binding.SubagentID, func(value *session.NativeSessionBinding) error {
 		value.LastNativeMessageID = accepted.SupervisorMessageID
+		value.ExecutionState = session.NativeExecutionRunning
+		value.CurrentExecutionID = accepted.SupervisorMessageID
+		value.PendingSupervisorMessageID = accepted.SupervisorMessageID
 		return nil
 	})
 	result.Message = accepted

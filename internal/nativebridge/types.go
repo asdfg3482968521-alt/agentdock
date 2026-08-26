@@ -128,6 +128,15 @@ type SupervisorMessageResult struct {
 	Dispatched        bool                            `json:"dispatched"`
 }
 
+type OrderedCorrectionResult struct {
+	Mode                    CorrectionMode          `json:"mode"`
+	Message                 SupervisorMessageResult `json:"message"`
+	OpenCodeSessionIDBefore string                  `json:"opencode_session_id_before"`
+	OpenCodeSessionIDAfter  string                  `json:"opencode_session_id_after"`
+	Aborted                 bool                    `json:"aborted"`
+	PreemptiveClaimed       bool                    `json:"preemptive_claimed"`
+}
+
 type OwnedMessage struct {
 	OpenCodeSessionID string                 `json:"opencode_session_id"`
 	Message           opencodenative.Message `json:"message"`

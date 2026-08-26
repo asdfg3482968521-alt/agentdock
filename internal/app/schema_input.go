@@ -76,6 +76,26 @@ func InputSchema(name string) map[string]any {
 	case "session_close":
 		props["session_id"] = map[string]any{"type": "string", "minLength": 1, "maxLength": 128, "description": "Durable D1 session identifier."}
 		required = []string{"session_id"}
+	case "agent_supervisor_message":
+		props["session_id"] = map[string]any{"type": "string", "minLength": 1, "maxLength": 128, "description": "Owning D1 Session identifier. AgentDock resolves the canonical workspace from this Session."}
+		props["subagent_id"] = map[string]any{"type": "string", "minLength": 1, "maxLength": 128, "description": "Existing Session-owned D3 native subagent identifier."}
+		props["client_message_id"] = map[string]any{"type": "string", "minLength": 1, "maxLength": 256, "description": "Stable caller idempotency key for exactly-once durable admission."}
+		props["kind"] = map[string]any{"type": "string", "enum": []string{"TASK", "FOLLOWUP"}, "description": "Durable supervisor message kind."}
+		props["text"] = map[string]any{"type": "string", "minLength": 1, "maxLength": 65536, "description": "Supervisor instruction sent to the exact persisted OpenCode root."}
+		required = []string{"session_id", "subagent_id", "client_message_id", "kind", "text"}
+	case "agent_supervisor_observe":
+		props["session_id"] = map[string]any{"type": "string", "minLength": 1, "maxLength": 128, "description": "Owning D1 Session identifier."}
+		props["subagent_id"] = map[string]any{"type": "string", "minLength": 1, "maxLength": 128, "description": "Existing Session-owned D3 native subagent identifier."}
+		props["after_cursor"] = map[string]any{"type": "integer", "minimum": 0, "default": 0, "description": "Return durable public events strictly after this cursor."}
+		props["limit"] = map[string]any{"type": "integer", "minimum": 1, "maximum": 128, "default": 64, "description": "Maximum durable public events to return."}
+		required = []string{"session_id", "subagent_id"}
+	case "agent_supervisor_correct":
+		props["session_id"] = map[string]any{"type": "string", "minLength": 1, "maxLength": 128, "description": "Owning D1 Session identifier. AgentDock resolves the canonical workspace from this Session."}
+		props["subagent_id"] = map[string]any{"type": "string", "minLength": 1, "maxLength": 128, "description": "Existing Session-owned D3 native subagent identifier."}
+		props["client_message_id"] = map[string]any{"type": "string", "minLength": 1, "maxLength": 256, "description": "Stable caller idempotency key for exactly-once durable correction admission."}
+		props["mode"] = map[string]any{"type": "string", "enum": []string{"graceful", "force"}, "description": "Correction mode. Graceful never aborts the active turn; force aborts before same-root correction dispatch."}
+		props["text"] = map[string]any{"type": "string", "minLength": 1, "maxLength": 65536, "description": "Correction instruction sent to the exact persisted OpenCode root."}
+		required = []string{"session_id", "subagent_id", "client_message_id", "mode", "text"}
 	case "read_file":
 		props["path"] = stringProp(toolfile.PathDescription("Host path. Relative paths resolve from ~/AgentDock."))
 		toolfile.AddRuntimeProperties(props)
@@ -456,7 +476,7 @@ func InputSchema(name string) map[string]any {
 		}
 	}
 	switch name {
-	case "opencode_bash", "opencode_read", "opencode_glob", "opencode_grep", "opencode_edit", "opencode_write", "opencode_apply_patch", "opencode_lsp", "opencode_git", "job_start", "job_status", "job_output", "job_cancel", "job_list", "session_open", "session_status", "session_list", "session_close", "exec_command", "acp_session", "acp_prompt", "acp_interaction", "recall_bootstrap", "recall_search", "recall_read", "recall_write", "recall_maintain", "private_note_manage", "mcp_manage", "mcp_tool_search", "mcp_tool_inspect", "mcp_tool_call", "browser_session", "browser_act", "browser_snapshot":
+	case "opencode_bash", "opencode_read", "opencode_glob", "opencode_grep", "opencode_edit", "opencode_write", "opencode_apply_patch", "opencode_lsp", "opencode_git", "job_start", "job_status", "job_output", "job_cancel", "job_list", "session_open", "session_status", "session_list", "session_close", "agent_supervisor_message", "agent_supervisor_observe", "agent_supervisor_correct", "exec_command", "acp_session", "acp_prompt", "acp_interaction", "recall_bootstrap", "recall_search", "recall_read", "recall_write", "recall_maintain", "private_note_manage", "mcp_manage", "mcp_tool_search", "mcp_tool_inspect", "mcp_tool_call", "browser_session", "browser_act", "browser_snapshot":
 		// 这些工具的参数契约需要严格收敛，避免删除或拼错的字段被静默忽略。
 		schema["additionalProperties"] = false
 	}

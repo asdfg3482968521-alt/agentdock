@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -111,6 +112,9 @@ func TestSupervisorMessageSequentialDuplicate(t *testing.T) {
 	if !first.Created || !first.Dispatched || first.Message.MessageSeq != 1 || first.Message.SupervisorMessageID == "" {
 		t.Fatalf("unexpected first result: %+v", first)
 	}
+	if !strings.HasPrefix(first.Message.SupervisorMessageID, "msg") {
+		t.Fatalf("supervisor_message_id must be a valid OpenCode messageID: %s", first.Message.SupervisorMessageID)
+	}
 	for i := 0; i < 10; i++ {
 		duplicate, err := f.bridge.SubmitSupervisorMessage(context.Background(), request)
 		if err != nil {
@@ -180,6 +184,42 @@ func TestSupervisorMessageConcurrentDuplicate(t *testing.T) {
 	_, _, async, _ := f.harness.counts()
 	if count != n || createdCount != 1 || dispatchedCount != 1 || async != 1 {
 		t.Fatalf("concurrent duplicate exactly-once failed: count=%d created=%d dispatched=%d async=%d", count, createdCount, dispatchedCount, async)
+	}
+}
+
+func TestSupervisorCorrectionForceDuplicateAndGraceful(t *testing.T) {
+	f := newMultiturnFixture(t)
+	forceRequest := f.request("client-force", "CORRECTION", "force correction")
+	first, err := f.bridge.SubmitSupervisorCorrection(context.Background(), forceRequest, CorrectionForce)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !first.Message.Created || !first.Message.Dispatched || !first.Aborted || first.Message.OpenCodeSessionID != f.binding.OpenCodeSessionID {
+		t.Fatalf("first force correction mismatch: %+v", first)
+	}
+	duplicate, err := f.bridge.SubmitSupervisorCorrection(context.Background(), forceRequest, CorrectionForce)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if duplicate.Message.Created || duplicate.Message.Dispatched || duplicate.Aborted || duplicate.Message.Message.SupervisorMessageID != first.Message.Message.SupervisorMessageID {
+		t.Fatalf("force duplicate repeated mutation: first=%+v duplicate=%+v", first, duplicate)
+	}
+	order, _, _ := f.harness.supervisorTrace()
+	_, _, async, abort := f.harness.counts()
+	if abort != 1 || async != 1 || len(order) != 2 || order[0] != "abort:"+f.binding.OpenCodeSessionID || order[1] != "async:"+f.binding.OpenCodeSessionID {
+		t.Fatalf("force correction order mismatch: abort=%d async=%d order=%v", abort, async, order)
+	}
+
+	graceful, err := f.bridge.SubmitSupervisorCorrection(context.Background(), f.request("client-graceful", "CORRECTION", "graceful correction"), CorrectionGraceful)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !graceful.Message.Created || !graceful.Message.Dispatched || graceful.Aborted || graceful.Message.Message.MessageSeq != first.Message.Message.MessageSeq+1 {
+		t.Fatalf("graceful correction mismatch: force=%+v graceful=%+v", first, graceful)
+	}
+	_, _, async, abort = f.harness.counts()
+	if abort != 1 || async != 2 {
+		t.Fatalf("graceful correction implicitly aborted or failed to dispatch: abort=%d async=%d", abort, async)
 	}
 }
 

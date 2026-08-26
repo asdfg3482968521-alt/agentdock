@@ -133,6 +133,27 @@ func OutputSchema(name string) map[string]any {
 		props["branch_preserved"] = map[string]any{"type": "boolean", "const": true}
 		props["worktree_preserved"] = map[string]any{"type": "boolean", "const": true}
 		required = []string{"ok", "session", "jobs_cancelled", "branch_preserved", "worktree_preserved"}
+	case "agent_supervisor_message":
+		props["opencode_session_id"] = stringProp("Exact persisted OpenCode root session id used for this durable message.")
+		props["message"] = objectProp("Durable supervisor message record including stable supervisor_message_id and dispatch state.")
+		props["created"] = boolProp("Whether this client_message_id created a new durable message.")
+		props["dispatched"] = boolProp("Whether the durable message was dispatched during this call.")
+		required = []string{"opencode_session_id", "message", "created", "dispatched"}
+	case "agent_supervisor_correct":
+		props["mode"] = stringProp("Applied correction mode: graceful or force.")
+		props["message"] = objectProp("Durable correction message record including stable supervisor_message_id and dispatch state.")
+		props["opencode_session_id_before"] = stringProp("Exact persisted OpenCode root before correction dispatch.")
+		props["opencode_session_id_after"] = stringProp("Exact persisted OpenCode root after correction dispatch; replacement roots are forbidden.")
+		props["aborted"] = boolProp("Whether force mode aborted the current native turn before correction dispatch.")
+		props["preemptive_claimed"] = boolProp("Always false for the current contract; true interrupted execution resume is not claimed.")
+		required = []string{"mode", "message", "opencode_session_id_before", "opencode_session_id_after", "aborted", "preemptive_claimed"}
+	case "agent_supervisor_observe":
+		props["root_opencode_session_id"] = stringProp("Exact persisted OpenCode root session id for this subagent conversation.")
+		props["statuses"] = objectProp("Native status map filtered to the Session-owned conversation lineage.")
+		props["messages"] = arrayProp("Native messages belonging to the owned conversation lineage.")
+		props["public_events"] = objectProp("Bounded durable public event page with stable cursor semantics.")
+		props["pending_permissions"] = arrayProp("Pending native permission requests that belong to this Session/subagent only.")
+		required = []string{"root_opencode_session_id", "statuses", "messages", "public_events", "pending_permissions"}
 	case "server_info":
 		props["server"] = stringProp("Server identifier.")
 		props["title"] = stringProp("Human-readable server title.")
@@ -490,7 +511,7 @@ func OutputSchema(name string) map[string]any {
 	}
 	additional := true
 	switch name {
-	case "session_open", "session_status", "session_list", "session_close":
+	case "session_open", "session_status", "session_list", "session_close", "agent_supervisor_message", "agent_supervisor_observe", "agent_supervisor_correct":
 		additional = false
 	}
 	return map[string]any{"type": "object", "properties": props, "required": required, "additionalProperties": additional}

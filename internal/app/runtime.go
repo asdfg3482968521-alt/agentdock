@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net/http"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -22,7 +23,9 @@ import (
 	"github.com/uvwt/agentdock/internal/evolution"
 	jobruntime "github.com/uvwt/agentdock/internal/job"
 	mcpclient "github.com/uvwt/agentdock/internal/mcp/client"
+	"github.com/uvwt/agentdock/internal/nativebridge"
 	opencoderuntime "github.com/uvwt/agentdock/internal/opencode"
+	"github.com/uvwt/agentdock/internal/opencodenative"
 	sessionruntime "github.com/uvwt/agentdock/internal/session"
 	"github.com/uvwt/agentdock/internal/taskstate"
 	toolacp "github.com/uvwt/agentdock/internal/tool/acp"
@@ -41,31 +44,32 @@ import (
 type Result = toolcore.Result
 
 type Runtime struct {
-	cfg             config.Config
-	ws              *workspace.Workspace
-	skills          *toolskill.Service
-	mcpClients      *mcpclient.Manager
-	tasks           *taskstate.Store
-	command         *toolcommand.Service
-	files           *toolfile.Service
-	dynamicMCP      *toolmcp.Service
-	openCode        *opencoderuntime.Supervisor
-	jobs            *jobruntime.Manager
-	sessions        *sessionruntime.Manager
-	agents          *agentruntime.Manager
-	credentialStore *credential.Store
-	media           *toolmedia.Service
-	browser         *toolbrowser.Service
-	recall          *toolrecall.Service
-	evolution       *evolution.Service
-	taskTools       *tooltask.Service
-	acp             *toolacp.Service
-	lifecycleMu     sync.RWMutex
-	commandCtx      context.Context
-	commandCancel   context.CancelFunc
-	closing         bool
-	closeOnce       sync.Once
-	closeErr        error
+	cfg              config.Config
+	ws               *workspace.Workspace
+	skills           *toolskill.Service
+	mcpClients       *mcpclient.Manager
+	tasks            *taskstate.Store
+	command          *toolcommand.Service
+	files            *toolfile.Service
+	dynamicMCP       *toolmcp.Service
+	openCode         *opencoderuntime.Supervisor
+	nativeSupervisor d3Supervisor
+	jobs             *jobruntime.Manager
+	sessions         *sessionruntime.Manager
+	agents           *agentruntime.Manager
+	credentialStore  *credential.Store
+	media            *toolmedia.Service
+	browser          *toolbrowser.Service
+	recall           *toolrecall.Service
+	evolution        *evolution.Service
+	taskTools        *tooltask.Service
+	acp              *toolacp.Service
+	lifecycleMu      sync.RWMutex
+	commandCtx       context.Context
+	commandCancel    context.CancelFunc
+	closing          bool
+	closeOnce        sync.Once
+	closeErr         error
 }
 
 func NewRuntime(cfg config.Config) (*Runtime, error) {
@@ -105,6 +109,29 @@ func NewRuntime(cfg config.Config) (*Runtime, error) {
 		return nil, fmt.Errorf("initialize session manager: %w", err)
 	}
 	runtime.sessions = sessionManager
+	if cfg.OpenCodeEnabled && cfg.OpenCodeNativeURL != "" {
+		location, locateErr := (opencoderuntime.ManifestLocator{Path: cfg.OpenCodeRuntimeManifest}).Locate(context.Background())
+		if locateErr != nil {
+			_ = runtime.Close()
+			return nil, fmt.Errorf("initialize D3 native supervisor runtime identity: %w", locateErr)
+		}
+		nativeClient, clientErr := opencodenative.NewClient(opencodenative.Config{BaseURL: cfg.OpenCodeNativeURL}, &http.Client{Timeout: 3 * time.Minute})
+		if clientErr != nil {
+			_ = runtime.Close()
+			return nil, fmt.Errorf("initialize D3 native OpenCode client: %w", clientErr)
+		}
+		bridge, bridgeErr := nativebridge.New(nativebridge.Options{
+			Sessions:             sessionManager,
+			Native:               nativeClient,
+			NativeRuntimeSHA:     location.VerifiedSHA,
+			NativeServerIdentity: cfg.OpenCodeNativeURL,
+		})
+		if bridgeErr != nil {
+			_ = runtime.Close()
+			return nil, fmt.Errorf("initialize D3 native supervisor bridge: %w", bridgeErr)
+		}
+		runtime.nativeSupervisor = bridge
+	}
 	if cfg.OpenCodeEnabled {
 		supervisor, err := opencoderuntime.NewSupervisor(context.Background(), opencoderuntime.Options{
 			Locator: opencoderuntime.ManifestLocator{Path: cfg.OpenCodeRuntimeManifest},

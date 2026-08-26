@@ -56,6 +56,7 @@ type Config struct {
 	OpenCodeEnabled                   bool
 	OpenCodeRuntimeManifest           string
 	OpenCodeLogDir                    string
+	OpenCodeNativeURL                 string
 	JobStorageRoot                    string
 	JobMaxConcurrent                  int
 	JobMaxConcurrentPerWorkspace      int
@@ -194,6 +195,7 @@ func FromEnv() (Config, error) {
 		OpenCodeEnabled:                   openCodeEnabled,
 		OpenCodeRuntimeManifest:           strings.TrimSpace(os.Getenv("AGENTDOCK_OPENCODE_RUNTIME_MANIFEST")),
 		OpenCodeLogDir:                    strings.TrimSpace(os.Getenv("AGENTDOCK_OPENCODE_LOG_DIR")),
+		OpenCodeNativeURL:                 strings.TrimSpace(os.Getenv("AGENTDOCK_D3_NATIVE_URL")),
 		JobStorageRoot:                    strings.TrimSpace(os.Getenv("AGENTDOCK_JOB_STORAGE_ROOT")),
 		JobMaxConcurrent:                  jobMaxConcurrent,
 		JobMaxConcurrentPerWorkspace:      jobMaxConcurrentPerWorkspace,
@@ -253,6 +255,29 @@ func (c *Config) Normalize() error {
 	}
 	c.OpenCodeRuntimeManifest = strings.TrimSpace(c.OpenCodeRuntimeManifest)
 	c.OpenCodeLogDir = strings.TrimSpace(c.OpenCodeLogDir)
+	c.OpenCodeNativeURL = strings.TrimRight(strings.TrimSpace(c.OpenCodeNativeURL), "/")
+	if c.OpenCodeNativeURL != "" {
+		parsed, parseErr := url.Parse(c.OpenCodeNativeURL)
+		if parseErr != nil || parsed.Scheme == "" || parsed.Host == "" {
+			return fmt.Errorf("AGENTDOCK_D3_NATIVE_URL must be an absolute HTTP(S) URL: %s", c.OpenCodeNativeURL)
+		}
+		if parsed.User != nil || parsed.RawQuery != "" || parsed.Fragment != "" {
+			return fmt.Errorf("AGENTDOCK_D3_NATIVE_URL must not contain user info, a query, or a fragment: %s", c.OpenCodeNativeURL)
+		}
+		switch strings.ToLower(parsed.Scheme) {
+		case "https":
+		case "http":
+			hostname := strings.ToLower(parsed.Hostname())
+			if hostname != "localhost" {
+				ip := net.ParseIP(hostname)
+				if ip == nil || !ip.IsLoopback() {
+					return fmt.Errorf("AGENTDOCK_D3_NATIVE_URL must use https for non-loopback hosts: %s", c.OpenCodeNativeURL)
+				}
+			}
+		default:
+			return fmt.Errorf("AGENTDOCK_D3_NATIVE_URL must use http or https: %s", c.OpenCodeNativeURL)
+		}
+	}
 	if c.OpenCodeEnabled {
 		if c.OpenCodeRuntimeManifest == "" {
 			return errors.New("AGENTDOCK_OPENCODE_RUNTIME_MANIFEST is required when OpenCode runtime integration is enabled")
