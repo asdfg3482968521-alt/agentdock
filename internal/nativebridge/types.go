@@ -63,6 +63,10 @@ type SessionStore interface {
 	MarkNativeSessionLost(sessionID, subagentID string) (session.NativeSessionBinding, error)
 	AppendNativePublicEvent(sessionID, subagentID string, event session.NativePublicEvent) (session.NativePublicEvent, error)
 	NativePublicEvents(sessionID, subagentID string, after int64, limit int) (session.NativePublicEventPage, error)
+	AdmitNativeSupervisorMessage(sessionID, subagentID, clientMessageID, kind, supervisorMessageID string, promptPayload json.RawMessage) (session.NativeSupervisorMessage, bool, error)
+	UpdateNativeSupervisorMessage(sessionID, subagentID, supervisorMessageID string, update func(*session.NativeSupervisorMessage) error) (session.NativeSupervisorMessage, error)
+	AdmitNativePermissionApproval(sessionID, subagentID string, approval session.NativePermissionApproval) (session.NativePermissionApproval, bool, error)
+	DecideNativePermissionApproval(sessionID, subagentID, approvalRequestID, clientDecisionID, decision string) (session.NativePermissionApproval, bool, error)
 }
 
 type NativeClient interface {
@@ -105,6 +109,22 @@ type Status struct {
 	OpenCodeSessionID string
 	Present           bool
 	Value             json.RawMessage
+}
+
+type SupervisorMessageRequest struct {
+	AgentDockSessionID string
+	SubagentID         string
+	Workspace          string
+	ClientMessageID    string
+	Kind               string
+	Prompt             opencodenative.PromptRequest
+}
+
+type SupervisorMessageResult struct {
+	OpenCodeSessionID string                          `json:"opencode_session_id"`
+	Message           session.NativeSupervisorMessage `json:"message"`
+	Created           bool                            `json:"created"`
+	Dispatched        bool                            `json:"dispatched"`
 }
 
 type OwnedMessage struct {
