@@ -24,7 +24,11 @@ func (r *Runtime) d1SessionOpen(ctx context.Context, args map[string]any) (Resul
 	projectID := strings.TrimSpace(toolcore.StringArg(args, "project_id", ""))
 	repoRoot := strings.TrimSpace(toolcore.StringArg(args, "repo_root", ""))
 	if repoRoot == "" {
-		repoRoot = defaultOpenCodeProjectRoot(r.cfg.OpenCodeProjectRoot, projectID)
+		var defaultErr error
+		repoRoot, defaultErr = defaultOpenCodeProjectRoot(r.cfg.OpenCodeProjectRoot, projectID)
+		if defaultErr != nil {
+			return nil, toolErrorCause("INVALID_REPO_ROOT", "create default OpenCode project root", "session", nil, defaultErr)
+		}
 	}
 	record, err := r.sessions.Open(ctx, sessionruntime.OpenRequest{
 		ProjectID:      projectID,
@@ -45,7 +49,7 @@ func (r *Runtime) d1SessionOpen(ctx context.Context, args map[string]any) (Resul
 // an explicit repo_root. The root is configured via AGENTDOCK_OPENCODE_PROJECT_ROOT
 // and defaults to <home>/OpenCode. project_id is already constrained by the
 // session_open schema to a safe [A-Za-z0-9._-] shape.
-func defaultOpenCodeProjectRoot(root, projectID string) string {
+func defaultOpenCodeProjectRoot(root, projectID string) (string, error) {
 	root = strings.TrimSpace(root)
 	projectID = strings.TrimSpace(projectID)
 	if projectID == "" {
@@ -56,7 +60,11 @@ func defaultOpenCodeProjectRoot(root, projectID string) string {
 			root = filepath.Join(home, "OpenCode")
 		}
 	}
-	return filepath.Join(root, projectID)
+	path := filepath.Join(root, projectID)
+	if err := os.MkdirAll(path, 0o755); err != nil {
+		return "", err
+	}
+	return path, nil
 }
 
 func (r *Runtime) d1SessionStatus(_ context.Context, args map[string]any) (Result, error) {
