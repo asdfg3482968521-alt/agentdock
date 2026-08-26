@@ -59,6 +59,15 @@ func knownNativeSupervisorMessageState(state NativeSupervisorMessageState) bool 
 }
 
 func normalizeNativeMultiturnBinding(binding *NativeSessionBinding) error {
+	if binding.OwnedNativeEventKeys == nil {
+		binding.OwnedNativeEventKeys = []string{}
+	}
+	for i := range binding.OwnedNativeEventKeys {
+		binding.OwnedNativeEventKeys[i] = strings.TrimSpace(binding.OwnedNativeEventKeys[i])
+		if binding.OwnedNativeEventKeys[i] == "" {
+			return newError(CodeNativeCursorInvalid, "native owned event provenance key cannot be empty", nil)
+		}
+	}
 	if binding.SupervisorMessages == nil {
 		binding.SupervisorMessages = []NativeSupervisorMessage{}
 	}

@@ -62,6 +62,7 @@ type SessionStore interface {
 	UpdateNativeSessionBinding(sessionID, subagentID string, update func(*session.NativeSessionBinding) error) (session.NativeSessionBinding, error)
 	MarkNativeSessionLost(sessionID, subagentID string) (session.NativeSessionBinding, error)
 	AppendNativePublicEvent(sessionID, subagentID string, event session.NativePublicEvent) (session.NativePublicEvent, error)
+	AppendNativeOwnedPublicEvent(sessionID, subagentID string, event session.NativePublicEvent) (session.NativePublicEvent, int64, bool, error)
 	NativePublicEvents(sessionID, subagentID string, after int64, limit int) (session.NativePublicEventPage, error)
 	AdmitNativeSupervisorMessage(sessionID, subagentID, clientMessageID, kind, supervisorMessageID string, promptPayload json.RawMessage) (session.NativeSupervisorMessage, bool, error)
 	UpdateNativeSupervisorMessage(sessionID, subagentID, supervisorMessageID string, update func(*session.NativeSupervisorMessage) error) (session.NativeSupervisorMessage, error)

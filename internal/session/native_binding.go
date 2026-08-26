@@ -70,6 +70,7 @@ type NativeSessionBinding struct {
 	NextSupervisorMessageSeq   int64                      `json:"next_supervisor_message_seq,omitempty"`
 	NextApprovalSeq            int64                      `json:"next_approval_seq,omitempty"`
 	LastOwnedEventCursor       int64                      `json:"last_owned_event_cursor,omitempty"`
+	OwnedNativeEventKeys       []string                   `json:"owned_native_event_keys,omitempty"`
 	SupervisorMessages         []NativeSupervisorMessage  `json:"supervisor_messages,omitempty"`
 	PermissionApprovals        []NativePermissionApproval `json:"permission_approvals,omitempty"`
 	NativeRuntimeSHA           string                     `json:"native_runtime_sha,omitempty"`
@@ -286,6 +287,10 @@ func cloneNativeSessionBinding(binding NativeSessionBinding) NativeSessionBindin
 	copy.ResultRefs = append([]NativeResultRef(nil), binding.ResultRefs...)
 	if copy.ResultRefs == nil {
 		copy.ResultRefs = []NativeResultRef{}
+	}
+	copy.OwnedNativeEventKeys = append([]string(nil), binding.OwnedNativeEventKeys...)
+	if copy.OwnedNativeEventKeys == nil {
+		copy.OwnedNativeEventKeys = []string{}
 	}
 	copy.SupervisorMessages = make([]NativeSupervisorMessage, len(binding.SupervisorMessages))
 	for i, message := range binding.SupervisorMessages {

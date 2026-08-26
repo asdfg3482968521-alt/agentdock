@@ -231,6 +231,34 @@ func (m *Manager) MarkSupervisorExecutionTerminal(ctx context.Context, agentDock
 	return terminal, nil
 }
 
+func (m *Manager) AdmitSupervisorPermissionApproval(ctx context.Context, agentDockSessionID, subagentID, workspace, supervisorMessageID, nativePermissionRequestID string, observedEventCursor int64) (session.NativePermissionApproval, bool, error) {
+	agentDockSessionID = strings.TrimSpace(agentDockSessionID)
+	subagentID = strings.TrimSpace(subagentID)
+	supervisorMessageID = strings.TrimSpace(supervisorMessageID)
+	nativePermissionRequestID = strings.TrimSpace(nativePermissionRequestID)
+	if agentDockSessionID == "" || subagentID == "" || supervisorMessageID == "" || nativePermissionRequestID == "" {
+		return session.NativePermissionApproval{}, false, &Error{Code: ErrorInvalid, Message: "approval admission requires agentdock_session_id, subagent_id, supervisor_message_id, and native permission request id"}
+	}
+	release := m.acquireKey(supervisorMutationKey(agentDockSessionID, subagentID))
+	defer release()
+	binding, _, err := m.Attach(ctx, agentDockSessionID, subagentID, workspace)
+	if err != nil {
+		return session.NativePermissionApproval{}, false, err
+	}
+	if observedEventCursor <= 0 || observedEventCursor > binding.LastOwnedEventCursor {
+		return session.NativePermissionApproval{}, false, &Error{Code: ErrorReconciliation, Message: "approval request must bind to an already durable owned native event cursor"}
+	}
+	approval, created, err := m.sessions.AdmitNativePermissionApproval(binding.AgentDockSessionID, binding.SubagentID, session.NativePermissionApproval{
+		NativePermissionRequestID: nativePermissionRequestID,
+		SupervisorMessageID:       supervisorMessageID,
+		ObservedEventCursor:       observedEventCursor,
+	})
+	if err != nil {
+		return session.NativePermissionApproval{}, false, &Error{Code: ErrorReconciliation, Message: "persist ordered supervisor permission approval hook", Cause: err}
+	}
+	return approval, created, nil
+}
+
 func decodeDurableSupervisorPrompt(message session.NativeSupervisorMessage) (opencodenative.PromptRequest, error) {
 	var prompt opencodenative.PromptRequest
 	if len(message.PromptPayload) == 0 {
