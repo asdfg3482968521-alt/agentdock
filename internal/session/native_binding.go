@@ -69,6 +69,7 @@ type NativeSessionBinding struct {
 	PendingSupervisorMessageID string                  `json:"pending_supervisor_message_id,omitempty"`
 	NativeRuntimeSHA           string                  `json:"native_runtime_sha,omitempty"`
 	NativeServerIdentity       string                  `json:"native_server_identity,omitempty"`
+	NativePublicEvents         []NativePublicEvent     `json:"native_public_events,omitempty"`
 }
 
 func nativeRuntimeScope(sessionID string) string {
@@ -144,6 +145,9 @@ func normalizeNativeBinding(record Record, binding NativeSessionBinding, now tim
 	}
 	if binding.ResultRefs == nil {
 		binding.ResultRefs = []NativeResultRef{}
+	}
+	if binding.NativePublicEvents == nil {
+		binding.NativePublicEvents = []NativePublicEvent{}
 	}
 	return binding, nil
 }
@@ -274,6 +278,13 @@ func cloneNativeSessionBinding(binding NativeSessionBinding) NativeSessionBindin
 	copy.ResultRefs = append([]NativeResultRef(nil), binding.ResultRefs...)
 	if copy.ResultRefs == nil {
 		copy.ResultRefs = []NativeResultRef{}
+	}
+	copy.NativePublicEvents = make([]NativePublicEvent, len(binding.NativePublicEvents))
+	for i, event := range binding.NativePublicEvents {
+		copy.NativePublicEvents[i] = cloneNativePublicEvent(event)
+	}
+	if copy.NativePublicEvents == nil {
+		copy.NativePublicEvents = []NativePublicEvent{}
 	}
 	return copy
 }

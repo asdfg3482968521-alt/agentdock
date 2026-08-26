@@ -324,15 +324,13 @@ func (m *Manager) ObserveEvents(ctx context.Context, sessionID, subagentID, work
 		if _, ok := owned[nativeEventSessionID(event)]; !ok {
 			return nil
 		}
-		updated, updateErr := m.sessions.UpdateNativeSessionBinding(binding.AgentDockSessionID, binding.SubagentID, func(value *session.NativeSessionBinding) error {
-			value.LastEventCursor++
-			value.LastNativeEventID = event.ID
-			return nil
-		})
+		publicEvent := classifyNativePublicEvent(event)
+		publicEvent.CreatedAt = m.now().UTC()
+		persisted, updateErr := m.sessions.AppendNativePublicEvent(binding.AgentDockSessionID, binding.SubagentID, publicEvent)
 		if updateErr != nil {
-			return &Error{Code: ErrorReconciliation, Message: "persist AgentDock-owned native event cursor", Cause: updateErr}
+			return &Error{Code: ErrorReconciliation, Message: "persist AgentDock-owned native public event cursor", Cause: updateErr}
 		}
-		return onEvent(event, updated.LastEventCursor)
+		return onEvent(event, persisted.Seq)
 	})
 }
 

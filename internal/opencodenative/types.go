@@ -91,6 +91,7 @@ type StatusMap map[string]json.RawMessage
 
 type NativeEvent struct {
 	ID         string          `json:"id,omitempty"`
+	Seq        int64           `json:"seq,omitempty"`
 	Type       string          `json:"type"`
 	Properties json.RawMessage `json:"properties"`
 }

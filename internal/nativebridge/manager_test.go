@@ -48,14 +48,18 @@ func (s *failOnceStore) BindNativeSession(sessionID string, binding session.Nati
 }
 
 type nativeHarness struct {
-	mu           sync.Mutex
-	sessions     map[string]opencodenative.SessionInfo
-	messages     map[string][]opencodenative.Message
-	createCalls  int
-	messageCalls int
-	asyncCalls   int
-	abortCalls   int
-	eventOrder   []string
+	mu                sync.Mutex
+	sessions          map[string]opencodenative.SessionInfo
+	messages          map[string][]opencodenative.Message
+	createCalls       int
+	messageCalls      int
+	asyncCalls        int
+	abortCalls        int
+	eventOrder        []string
+	controlOrder      []string
+	asyncPrompts      []opencodenative.PromptRequest
+	permissions       []opencodenative.PermissionRequest
+	permissionReplies []opencodenative.PermissionReplyRequest
 }
 
 func newNativeHarness() *nativeHarness {
@@ -87,6 +91,20 @@ func (h *nativeHarness) handler(w http.ResponseWriter, r *http.Request) {
 	}
 	if r.Method == http.MethodGet && r.URL.Path == "/provider" {
 		write(map[string]any{"all": []any{}, "default": map[string]any{}})
+		return
+	}
+	if r.Method == http.MethodGet && r.URL.Path == "/permission" {
+		write(h.permissions)
+		return
+	}
+	if r.Method == http.MethodPost && strings.HasPrefix(r.URL.Path, "/permission/") && strings.HasSuffix(r.URL.Path, "/reply") {
+		var reply opencodenative.PermissionReplyRequest
+		if err := json.NewDecoder(r.Body).Decode(&reply); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		h.permissionReplies = append(h.permissionReplies, reply)
+		write(true)
 		return
 	}
 	if r.Method == http.MethodGet && r.URL.Path == "/event" {
@@ -162,11 +180,19 @@ func (h *nativeHarness) handler(w http.ResponseWriter, r *http.Request) {
 		}
 		if len(parts) == 3 && parts[2] == "prompt_async" && r.Method == http.MethodPost {
 			h.asyncCalls++
+			var prompt opencodenative.PromptRequest
+			if err := json.NewDecoder(r.Body).Decode(&prompt); err != nil {
+				http.Error(w, err.Error(), http.StatusBadRequest)
+				return
+			}
+			h.asyncPrompts = append(h.asyncPrompts, prompt)
+			h.controlOrder = append(h.controlOrder, "async:"+id)
 			w.WriteHeader(http.StatusNoContent)
 			return
 		}
 		if len(parts) == 3 && parts[2] == "abort" && r.Method == http.MethodPost {
 			h.abortCalls++
+			h.controlOrder = append(h.controlOrder, "abort:"+id)
 			write(true)
 			return
 		}
@@ -189,6 +215,16 @@ func (h *nativeHarness) setEventOrder(ids ...string) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	h.eventOrder = append([]string(nil), ids...)
+}
+func (h *nativeHarness) setPermissions(items ...opencodenative.PermissionRequest) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.permissions = append([]opencodenative.PermissionRequest(nil), items...)
+}
+func (h *nativeHarness) supervisorTrace() (order []string, replies []opencodenative.PermissionReplyRequest, prompts []opencodenative.PromptRequest) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return append([]string(nil), h.controlOrder...), append([]opencodenative.PermissionReplyRequest(nil), h.permissionReplies...), append([]opencodenative.PromptRequest(nil), h.asyncPrompts...)
 }
 
 func TestBridgeDurableReconciliationRestartIsolationAndLost(t *testing.T) {

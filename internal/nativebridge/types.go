@@ -11,12 +11,14 @@ import (
 )
 
 const (
-	ErrorInvalid        = "NATIVE_BRIDGE_INVALID"
-	ErrorOwnership      = "NATIVE_BRIDGE_OWNERSHIP_MISMATCH"
-	ErrorWorkspace      = "NATIVE_BRIDGE_WORKSPACE_MISMATCH"
-	ErrorLost           = "NATIVE_BRIDGE_LOST"
-	ErrorReconciliation = "NATIVE_BRIDGE_RECONCILIATION_FAILED"
-	ErrorNative         = "NATIVE_BRIDGE_NATIVE_FAILED"
+	ErrorInvalid             = "NATIVE_BRIDGE_INVALID"
+	ErrorOwnership           = "NATIVE_BRIDGE_OWNERSHIP_MISMATCH"
+	ErrorWorkspace           = "NATIVE_BRIDGE_WORKSPACE_MISMATCH"
+	ErrorLost                = "NATIVE_BRIDGE_LOST"
+	ErrorReconciliation      = "NATIVE_BRIDGE_RECONCILIATION_FAILED"
+	ErrorNative              = "NATIVE_BRIDGE_NATIVE_FAILED"
+	ErrorSameSession         = "NATIVE_BRIDGE_SAME_SESSION_GATE_FAILED"
+	ErrorPermissionOwnership = "NATIVE_BRIDGE_PERMISSION_OWNERSHIP_MISMATCH"
 )
 
 const (
@@ -59,6 +61,8 @@ type SessionStore interface {
 	BindNativeSession(sessionID string, binding session.NativeSessionBinding) (session.NativeSessionBinding, error)
 	UpdateNativeSessionBinding(sessionID, subagentID string, update func(*session.NativeSessionBinding) error) (session.NativeSessionBinding, error)
 	MarkNativeSessionLost(sessionID, subagentID string) (session.NativeSessionBinding, error)
+	AppendNativePublicEvent(sessionID, subagentID string, event session.NativePublicEvent) (session.NativePublicEvent, error)
+	NativePublicEvents(sessionID, subagentID string, after int64, limit int) (session.NativePublicEventPage, error)
 }
 
 type NativeClient interface {
@@ -73,6 +77,8 @@ type NativeClient interface {
 	ObserveNativeEvents(context.Context, string, func(opencodenative.NativeEvent) error) error
 	AbortNativeExecution(context.Context, string, string) error
 	ContinueNativeConversation(context.Context, string, string, opencodenative.PromptRequest) error
+	ListNativePermissions(context.Context, string) ([]opencodenative.PermissionRequest, error)
+	ReplyNativePermission(context.Context, string, string, opencodenative.PermissionReplyRequest) error
 	DiscoverNativeProviderModelMetadata(context.Context, string) (json.RawMessage, error)
 }
 
@@ -99,4 +105,66 @@ type Status struct {
 	OpenCodeSessionID string
 	Present           bool
 	Value             json.RawMessage
+}
+
+type OwnedMessage struct {
+	OpenCodeSessionID string                 `json:"opencode_session_id"`
+	Message           opencodenative.Message `json:"message"`
+}
+
+type SupervisorObservation struct {
+	RootOpenCodeSessionID string                         `json:"root_opencode_session_id"`
+	Statuses              map[string]json.RawMessage     `json:"statuses"`
+	Messages              []OwnedMessage                 `json:"messages"`
+	PublicEvents          session.NativePublicEventPage  `json:"public_events"`
+	PendingPermissions    []SupervisorPermissionIdentity `json:"pending_permissions"`
+}
+
+type CorrectionMode string
+
+const (
+	CorrectionGraceful CorrectionMode = "graceful"
+	CorrectionForce    CorrectionMode = "force"
+)
+
+type CorrectionRequest struct {
+	Mode   CorrectionMode
+	Prompt opencodenative.PromptRequest
+}
+
+type CorrectionResult struct {
+	Mode                    CorrectionMode `json:"mode"`
+	OrderID                 string         `json:"order_id"`
+	OpenCodeSessionIDBefore string         `json:"opencode_session_id_before"`
+	OpenCodeSessionIDAfter  string         `json:"opencode_session_id_after"`
+	Aborted                 bool           `json:"aborted"`
+	PreemptiveClaimed       bool           `json:"preemptive_claimed"`
+}
+
+type CancelResult struct {
+	OpenCodeSessionID string `json:"opencode_session_id"`
+	Aborted           bool   `json:"aborted"`
+}
+
+type PermissionDecision string
+
+const (
+	PermissionDecisionApprove PermissionDecision = "approve"
+	PermissionDecisionReject  PermissionDecision = "reject"
+)
+
+type SupervisorPermissionIdentity struct {
+	RequestID             string                         `json:"request_id"`
+	NativeSessionID       string                         `json:"native_session_id"`
+	RootOpenCodeSessionID string                         `json:"root_opencode_session_id"`
+	AgentDockSessionID    string                         `json:"agentdock_session_id"`
+	SubagentID            string                         `json:"subagent_id"`
+	Workspace             string                         `json:"workspace"`
+	PermissionMode        string                         `json:"permission_mode"`
+	Permission            string                         `json:"permission"`
+	Patterns              []string                       `json:"patterns"`
+	Metadata              map[string]any                 `json:"metadata"`
+	Always                []string                       `json:"always"`
+	Tool                  *opencodenative.PermissionTool `json:"tool,omitempty"`
+	ApprovalScope         string                         `json:"approval_scope"`
 }

@@ -125,6 +125,31 @@ func (c *Client) AbortNativeExecution(ctx context.Context, directory, sessionID 
 	return c.doJSON(ctx, http.MethodPost, "/session/"+url.PathEscape(strings.TrimSpace(sessionID))+"/abort", directory, nil, &result)
 }
 
+func (c *Client) ListNativePermissions(ctx context.Context, directory string) ([]PermissionRequest, error) {
+	var result []PermissionRequest
+	if err := c.doJSON(ctx, http.MethodGet, "/permission", directory, nil, &result); err != nil {
+		return nil, err
+	}
+	if result == nil {
+		result = []PermissionRequest{}
+	}
+	return result, nil
+}
+
+func (c *Client) ReplyNativePermission(ctx context.Context, directory, requestID string, reply PermissionReplyRequest) error {
+	requestID = strings.TrimSpace(requestID)
+	if requestID == "" {
+		return &Error{Code: ErrorInvalid, Message: "permission request id is required"}
+	}
+	switch reply.Reply {
+	case PermissionReplyOnce, PermissionReplyAlways, PermissionReplyReject:
+	default:
+		return &Error{Code: ErrorInvalid, Message: "invalid permission reply"}
+	}
+	var result bool
+	return c.doJSON(ctx, http.MethodPost, "/permission/"+url.PathEscape(requestID)+"/reply", directory, reply, &result)
+}
+
 func (c *Client) DiscoverNativeProviderModelMetadata(ctx context.Context, directory string) (json.RawMessage, error) {
 	var result json.RawMessage
 	if err := c.doJSON(ctx, http.MethodGet, "/provider", directory, nil, &result); err != nil {
@@ -158,15 +183,21 @@ func (c *Client) ObserveNativeEvents(ctx context.Context, directory string, onEv
 	buffer := make([]byte, 64<<10)
 	scanner.Buffer(buffer, 4<<20)
 	var data strings.Builder
+	var eventID string
 	flush := func() error {
 		if data.Len() == 0 {
+			eventID = ""
 			return nil
 		}
 		var event NativeEvent
 		if err := json.Unmarshal([]byte(data.String()), &event); err != nil {
 			return &Error{Code: ErrorDecode, Message: "decode OpenCode native event", Cause: err}
 		}
+		if event.ID == "" {
+			event.ID = eventID
+		}
 		data.Reset()
+		eventID = ""
 		return onEvent(event)
 	}
 	for scanner.Scan() {
@@ -175,6 +206,10 @@ func (c *Client) ObserveNativeEvents(ctx context.Context, directory string, onEv
 			if err := flush(); err != nil {
 				return err
 			}
+			continue
+		}
+		if strings.HasPrefix(line, "id:") {
+			eventID = strings.TrimSpace(strings.TrimPrefix(line, "id:"))
 			continue
 		}
 		if strings.HasPrefix(line, "data:") {
