@@ -58,12 +58,12 @@ func InputSchema(name string) map[string]any {
 		props["limit"] = boundedIntProp("Maximum jobs to return. Defaults to 50 and is capped at 200.", 1, 200)
 	case "session_open":
 		props["project_id"] = map[string]any{"type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$", "description": "Stable project identifier."}
-		props["repo_root"] = map[string]any{"type": "string", "minLength": 1, "description": "Existing repository or directory path. AgentDock canonicalizes it before creating Session metadata."}
+		props["repo_root"] = map[string]any{"type": "string", "minLength": 1, "description": "Existing repository or directory path. When omitted, AgentDock creates a deterministic NEW project under AGENTDOCK_OPENCODE_PROJECT_ROOT (default <home>/OpenCode)."}
 		props["base_ref"] = map[string]any{"type": []string{"string", "null"}, "minLength": 1, "maxLength": 512, "default": nil, "description": "Git local branch, tag, or full 40-character commit SHA. Omit for non-Git workspaces."}
 		props["permission_mode"] = map[string]any{"type": "string", "enum": []string{"project", "full"}, "default": "project", "description": "OpenCode permission mode. Defaults to project."}
 		props["client_tag"] = map[string]any{"type": []string{"string", "null"}, "minLength": 1, "maxLength": 256, "default": nil, "description": "Optional caller tag used for Session filtering."}
 		props["isolation_mode"] = map[string]any{"type": []string{"string", "null"}, "enum": []any{"worktree", "exclusive", "shared-readonly", "shared-explicit", nil}, "default": nil, "description": "Isolation policy. Git defaults to worktree; writable non-Git defaults to exclusive."}
-		required = []string{"project_id", "repo_root"}
+		required = []string{"project_id"}
 	case "session_status":
 		props["session_id"] = map[string]any{"type": "string", "minLength": 1, "maxLength": 128, "description": "Durable D1 session identifier."}
 		required = []string{"session_id"}

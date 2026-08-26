@@ -37,7 +37,9 @@ func TestD1SessionToolsAreRegisteredWithStrictSchemas(t *testing.T) {
 		}
 	}
 	open := InputSchema("session_open")
-	assertRequiredFields(t, open, "project_id", "repo_root")
+	// D3 default-root change: repo_root is now optional; a NEW project defaults
+	// under AGENTDOCK_OPENCODE_PROJECT_ROOT when the caller omits it.
+	assertRequiredFields(t, open, "project_id")
 	status := InputSchema("session_status")
 	assertRequiredFields(t, status, "session_id")
 	closeSchema := InputSchema("session_close")

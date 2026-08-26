@@ -6,6 +6,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 
@@ -19,9 +21,14 @@ func (r *Runtime) d1SessionOpen(ctx context.Context, args map[string]any) (Resul
 	if r == nil || r.sessions == nil {
 		return nil, toolError("SESSION_RUNTIME_UNAVAILABLE", "session runtime is unavailable", "session")
 	}
+	projectID := strings.TrimSpace(toolcore.StringArg(args, "project_id", ""))
+	repoRoot := strings.TrimSpace(toolcore.StringArg(args, "repo_root", ""))
+	if repoRoot == "" {
+		repoRoot = defaultOpenCodeProjectRoot(r.cfg.OpenCodeProjectRoot, projectID)
+	}
 	record, err := r.sessions.Open(ctx, sessionruntime.OpenRequest{
-		ProjectID:      strings.TrimSpace(toolcore.StringArg(args, "project_id", "")),
-		RepoRoot:       strings.TrimSpace(toolcore.StringArg(args, "repo_root", "")),
+		ProjectID:      projectID,
+		RepoRoot:       repoRoot,
 		BaseRef:        strings.TrimSpace(toolcore.StringArg(args, "base_ref", "")),
 		PermissionMode: strings.TrimSpace(toolcore.StringArg(args, "permission_mode", "project")),
 		ClientTag:      strings.TrimSpace(toolcore.StringArg(args, "client_tag", "")),
@@ -31,6 +38,25 @@ func (r *Runtime) d1SessionOpen(ctx context.Context, args map[string]any) (Resul
 		return nil, sessionToolError(err)
 	}
 	return sessionResult(Result{"ok": true, "session": record})
+}
+
+// defaultOpenCodeProjectRoot resolves the deterministic workspace for a NEW
+// AgentDock/OpenCode-managed subagent project when the caller does not supply
+// an explicit repo_root. The root is configured via AGENTDOCK_OPENCODE_PROJECT_ROOT
+// and defaults to <home>/OpenCode. project_id is already constrained by the
+// session_open schema to a safe [A-Za-z0-9._-] shape.
+func defaultOpenCodeProjectRoot(root, projectID string) string {
+	root = strings.TrimSpace(root)
+	projectID = strings.TrimSpace(projectID)
+	if projectID == "" {
+		projectID = "project"
+	}
+	if root == "" {
+		if home, err := os.UserHomeDir(); err == nil && strings.TrimSpace(home) != "" {
+			root = filepath.Join(home, "OpenCode")
+		}
+	}
+	return filepath.Join(root, projectID)
 }
 
 func (r *Runtime) d1SessionStatus(_ context.Context, args map[string]any) (Result, error) {

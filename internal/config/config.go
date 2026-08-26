@@ -57,6 +57,7 @@ type Config struct {
 	OpenCodeRuntimeManifest           string
 	OpenCodeLogDir                    string
 	OpenCodeNativeURL                 string
+	OpenCodeProjectRoot               string
 	JobStorageRoot                    string
 	JobMaxConcurrent                  int
 	JobMaxConcurrentPerWorkspace      int
@@ -196,6 +197,7 @@ func FromEnv() (Config, error) {
 		OpenCodeRuntimeManifest:           strings.TrimSpace(os.Getenv("AGENTDOCK_OPENCODE_RUNTIME_MANIFEST")),
 		OpenCodeLogDir:                    strings.TrimSpace(os.Getenv("AGENTDOCK_OPENCODE_LOG_DIR")),
 		OpenCodeNativeURL:                 strings.TrimSpace(os.Getenv("AGENTDOCK_D3_NATIVE_URL")),
+		OpenCodeProjectRoot:               strings.TrimSpace(os.Getenv("AGENTDOCK_OPENCODE_PROJECT_ROOT")),
 		JobStorageRoot:                    strings.TrimSpace(os.Getenv("AGENTDOCK_JOB_STORAGE_ROOT")),
 		JobMaxConcurrent:                  jobMaxConcurrent,
 		JobMaxConcurrentPerWorkspace:      jobMaxConcurrentPerWorkspace,
@@ -226,12 +228,16 @@ func (c *Config) Normalize() error {
 	if c.AgentDockDefaultDir == "" {
 		c.AgentDockDefaultDir = filepath.Join(home, "AgentDock")
 	}
+	if c.OpenCodeProjectRoot == "" {
+		c.OpenCodeProjectRoot = filepath.Join(home, "OpenCode")
+	}
 	paths := []struct {
 		label string
 		value *string
 	}{
 		{label: "AgentDockHome", value: &c.AgentDockHome},
 		{label: "AgentDockDefaultDir", value: &c.AgentDockDefaultDir},
+		{label: "OpenCodeProjectRoot", value: &c.OpenCodeProjectRoot},
 	}
 	for _, path := range paths {
 		cleaned := filepath.Clean(strings.TrimSpace(*path.value))
