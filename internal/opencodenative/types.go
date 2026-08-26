@@ -39,6 +39,12 @@ type ModelRef struct {
 	ModelID    string `json:"modelID"`
 }
 
+type SessionModelRef struct {
+	ID         string `json:"id"`
+	ProviderID string `json:"providerID"`
+	Variant    string `json:"variant,omitempty"`
+}
+
 type CreateSessionRequest struct {
 	Title    string         `json:"title,omitempty"`
 	Agent    string         `json:"agent,omitempty"`
@@ -46,16 +52,24 @@ type CreateSessionRequest struct {
 }
 
 type SessionInfo struct {
-	ID        string         `json:"id"`
-	Slug      string         `json:"slug,omitempty"`
-	ProjectID string         `json:"projectID,omitempty"`
-	Directory string         `json:"directory"`
-	ParentID  string         `json:"parentID,omitempty"`
-	Title     string         `json:"title,omitempty"`
-	Agent     string         `json:"agent,omitempty"`
-	Version   string         `json:"version,omitempty"`
-	Metadata  map[string]any `json:"metadata,omitempty"`
-	Time      map[string]any `json:"time,omitempty"`
+	ID        string           `json:"id"`
+	Slug      string           `json:"slug,omitempty"`
+	ProjectID string           `json:"projectID,omitempty"`
+	Directory string           `json:"directory"`
+	ParentID  string           `json:"parentID,omitempty"`
+	Title     string           `json:"title,omitempty"`
+	Agent     string           `json:"agent,omitempty"`
+	Model     *SessionModelRef `json:"model,omitempty"`
+	Version   string           `json:"version,omitempty"`
+	Metadata  map[string]any   `json:"metadata,omitempty"`
+	Time      map[string]any   `json:"time,omitempty"`
+}
+
+func (s SessionInfo) SelectedModel() (ModelRef, bool) {
+	if s.Model == nil || s.Model.ProviderID == "" || s.Model.ID == "" {
+		return ModelRef{}, false
+	}
+	return ModelRef{ProviderID: s.Model.ProviderID, ModelID: s.Model.ID}, true
 }
 
 type TextPartInput struct {
@@ -77,9 +91,27 @@ func TextPrompt(text string) PromptRequest {
 }
 
 type MessageInfo struct {
-	ID        string `json:"id"`
-	SessionID string `json:"sessionID"`
-	Role      string `json:"role"`
+	ID         string          `json:"id"`
+	SessionID  string          `json:"sessionID"`
+	Role       string          `json:"role"`
+	Model      *ModelRef       `json:"model,omitempty"`
+	ProviderID string          `json:"providerID,omitempty"`
+	ModelID    string          `json:"modelID,omitempty"`
+	Error      json.RawMessage `json:"error,omitempty"`
+}
+
+func (m MessageInfo) HasError() bool {
+	return len(m.Error) > 0 && string(m.Error) != "null"
+}
+
+func (m MessageInfo) SelectedModel() (ModelRef, bool) {
+	if m.ProviderID != "" && m.ModelID != "" {
+		return ModelRef{ProviderID: m.ProviderID, ModelID: m.ModelID}, true
+	}
+	if m.Model != nil && m.Model.ProviderID != "" && m.Model.ModelID != "" {
+		return *m.Model, true
+	}
+	return ModelRef{}, false
 }
 
 type Message struct {
@@ -88,6 +120,39 @@ type Message struct {
 }
 
 type StatusMap map[string]json.RawMessage
+
+type ProviderModel struct {
+	ID         string `json:"id"`
+	ProviderID string `json:"providerID"`
+	Name       string `json:"name,omitempty"`
+	Status     string `json:"status,omitempty"`
+}
+
+type ProviderInfo struct {
+	ID     string                   `json:"id"`
+	Name   string                   `json:"name,omitempty"`
+	Source string                   `json:"source,omitempty"`
+	Models map[string]ProviderModel `json:"models,omitempty"`
+}
+
+type ProviderListResult struct {
+	All       []ProviderInfo    `json:"all"`
+	Default   map[string]string `json:"default"`
+	Connected []string          `json:"connected"`
+}
+
+type EffectiveConfig struct {
+	Model string `json:"model,omitempty"`
+}
+
+type ModelDiscovery struct {
+	Configured                  ModelRef           `json:"configured"`
+	ConfiguredAvailable         bool               `json:"configured_available"`
+	ConfiguredProviderSource    string             `json:"configured_provider_source,omitempty"`
+	ConfiguredProviderConnected bool               `json:"configured_provider_connected"`
+	ProviderDefault             ModelRef           `json:"provider_default"`
+	Catalog                     ProviderListResult `json:"catalog"`
+}
 
 type NativeEvent struct {
 	ID         string          `json:"id,omitempty"`

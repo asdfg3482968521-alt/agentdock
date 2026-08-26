@@ -136,6 +136,48 @@ func (c *Client) DiscoverNativeProviderModelMetadata(ctx context.Context, direct
 	return result, nil
 }
 
+func (c *Client) DiscoverNativeModels(ctx context.Context, directory string) (ModelDiscovery, error) {
+	var result ModelDiscovery
+	var providers ProviderListResult
+	if err := c.doJSON(ctx, http.MethodGet, "/provider", directory, nil, &providers); err != nil {
+		return result, err
+	}
+	result.Catalog = providers
+	var config EffectiveConfig
+	if err := c.doJSON(ctx, http.MethodGet, "/config", directory, nil, &config); err != nil {
+		return result, err
+	}
+
+	configured := strings.TrimSpace(config.Model)
+	if configured == "" {
+		return result, nil
+	}
+	providerID, modelID, ok := strings.Cut(configured, "/")
+	providerID, modelID = strings.TrimSpace(providerID), strings.TrimSpace(modelID)
+	if !ok || providerID == "" || modelID == "" {
+		return result, &Error{Code: ErrorDecode, Message: "OpenCode configured model must be provider/model"}
+	}
+	result.Configured = ModelRef{ProviderID: providerID, ModelID: modelID}
+	if defaultModelID := strings.TrimSpace(providers.Default[providerID]); defaultModelID != "" {
+		result.ProviderDefault = ModelRef{ProviderID: providerID, ModelID: defaultModelID}
+	}
+	for _, connected := range providers.Connected {
+		if strings.TrimSpace(connected) == providerID {
+			result.ConfiguredProviderConnected = true
+			break
+		}
+	}
+	for _, provider := range providers.All {
+		if provider.ID != providerID {
+			continue
+		}
+		result.ConfiguredProviderSource = provider.Source
+		_, result.ConfiguredAvailable = provider.Models[modelID]
+		break
+	}
+	return result, nil
+}
+
 func (c *Client) ObserveNativeEvents(ctx context.Context, directory string, onEvent func(NativeEvent) error) error {
 	if onEvent == nil {
 		return &Error{Code: ErrorInvalid, Message: "native event observer callback is required"}

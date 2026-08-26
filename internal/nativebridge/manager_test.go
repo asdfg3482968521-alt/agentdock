@@ -86,7 +86,17 @@ func (h *nativeHarness) handler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if r.Method == http.MethodGet && r.URL.Path == "/provider" {
-		write(map[string]any{"all": []any{}, "default": map[string]any{}})
+		write(map[string]any{
+			"all": []any{map[string]any{
+				"id": "jiyuan", "name": "Jiyuan", "source": "config",
+				"models": map[string]any{"deepseek-v4-flash-0731": map[string]any{"id": "deepseek-v4-flash-0731", "providerID": "jiyuan", "name": "DeepSeek V4 Flash", "status": "active"}},
+			}},
+			"default": map[string]any{"jiyuan": "deepseek-v4-flash-0731"}, "connected": []string{"jiyuan"},
+		})
+		return
+	}
+	if r.Method == http.MethodGet && r.URL.Path == "/config" {
+		write(map[string]any{"model": "jiyuan/deepseek-v4-flash-0731"})
 		return
 	}
 	if r.Method == http.MethodGet && r.URL.Path == "/event" {
@@ -308,6 +318,10 @@ func TestBridgeDurableReconciliationRestartIsolationAndLost(t *testing.T) {
 	}
 	if _, err := bridge2.ProviderModelMetadata(context.Background(), a.SessionID, binding.SubagentID, a.Workspace()); err != nil {
 		t.Fatalf("provider metadata failed: %v", err)
+	}
+	discovery, err := bridge2.ModelDiscovery(context.Background(), a.SessionID, binding.SubagentID, a.Workspace())
+	if err != nil || discovery.Configured != (opencodenative.ModelRef{ProviderID: "jiyuan", ModelID: "deepseek-v4-flash-0731"}) || !discovery.ConfiguredAvailable {
+		t.Fatalf("model discovery bridge failed: %+v err=%v", discovery, err)
 	}
 	_, messageCalls, asyncCalls, abortCalls := harness.counts()
 	if messageCalls != 1 || asyncCalls != 1 || abortCalls != 1 {

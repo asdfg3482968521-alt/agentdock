@@ -128,6 +128,107 @@ func TestClientNativePrimitivesAndApplicationReadiness(t *testing.T) {
 	}
 }
 
+func TestDiscoverNativeModelsReportsConfiguredAvailableAndProviderDefault(t *testing.T) {
+	const directory = `C:\work\d3-e`
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if got := r.URL.Query().Get("directory"); got != directory {
+			http.Error(w, "bad directory: "+got, http.StatusBadRequest)
+			return
+		}
+		switch r.URL.Path {
+		case "/provider":
+			writeJSON(w, map[string]any{
+				"all": []any{
+					map[string]any{
+						"id": "jiyuan", "name": "Jiyuan", "source": "config", "env": []string{}, "options": map[string]any{},
+						"models": map[string]any{
+							"deepseek-v4-flash-0731": map[string]any{"id": "deepseek-v4-flash-0731", "providerID": "jiyuan", "name": "DeepSeek V4 Flash", "status": "active"},
+							"fallback":               map[string]any{"id": "fallback", "providerID": "jiyuan", "name": "Fallback", "status": "active"},
+						},
+					},
+				},
+				"default":   map[string]any{"jiyuan": "fallback"},
+				"connected": []string{"jiyuan"},
+			})
+		case "/config":
+			writeJSON(w, map[string]any{"model": "jiyuan/deepseek-v4-flash-0731"})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	client, err := NewClient(Config{BaseURL: server.URL}, server.Client())
+	if err != nil {
+		t.Fatal(err)
+	}
+	discovery, err := client.DiscoverNativeModels(context.Background(), directory)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if discovery.Configured != (ModelRef{ProviderID: "jiyuan", ModelID: "deepseek-v4-flash-0731"}) {
+		t.Fatalf("configured model mismatch: %+v", discovery.Configured)
+	}
+	if !discovery.ConfiguredAvailable || !discovery.ConfiguredProviderConnected || discovery.ConfiguredProviderSource != "config" {
+		t.Fatalf("configured model truth mismatch: %+v", discovery)
+	}
+	if discovery.ProviderDefault != (ModelRef{ProviderID: "jiyuan", ModelID: "fallback"}) {
+		t.Fatalf("provider default mismatch: %+v", discovery.ProviderDefault)
+	}
+	if discovery.Catalog.Default["jiyuan"] != "fallback" || len(discovery.Catalog.All) != 1 {
+		t.Fatalf("provider catalog missing from discovery: %+v", discovery.Catalog)
+	}
+}
+
+func TestNativeSessionAndMessageDecodeSelectedProviderModel(t *testing.T) {
+	const directory = `C:\work\d3-e`
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if got := r.URL.Query().Get("directory"); got != directory {
+			http.Error(w, "bad directory: "+got, http.StatusBadRequest)
+			return
+		}
+		switch r.URL.Path {
+		case "/session/ses-visible":
+			writeJSON(w, map[string]any{
+				"id": "ses-visible", "directory": directory,
+				"model": map[string]any{"id": "deepseek-v4-flash-0731", "providerID": "jiyuan", "variant": "default"},
+			})
+		case "/session/ses-visible/message":
+			writeJSON(w, []any{
+				map[string]any{"info": map[string]any{"id": "msg-user", "sessionID": "ses-visible", "role": "user", "model": map[string]any{"providerID": "jiyuan", "modelID": "deepseek-v4-flash-0731"}}, "parts": []any{}},
+				map[string]any{"info": map[string]any{"id": "msg-assistant", "sessionID": "ses-visible", "role": "assistant", "providerID": "jiyuan", "modelID": "deepseek-v4-flash-0731", "error": map[string]any{"name": "APIError", "data": map[string]any{"statusCode": 401}}}, "parts": []any{}},
+			})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	client, err := NewClient(Config{BaseURL: server.URL}, server.Client())
+	if err != nil {
+		t.Fatal(err)
+	}
+	info, err := client.GetNativeSession(context.Background(), directory, "ses-visible")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, ok := info.SelectedModel(); !ok || got != (ModelRef{ProviderID: "jiyuan", ModelID: "deepseek-v4-flash-0731"}) {
+		t.Fatalf("session selected model mismatch: got=%+v ok=%v info=%+v", got, ok, info)
+	}
+	messages, err := client.ListNativeMessages(context.Background(), directory, "ses-visible")
+	if err != nil || len(messages) != 2 {
+		t.Fatalf("message readback: len=%d err=%v", len(messages), err)
+	}
+	for _, message := range messages {
+		if got, ok := message.Info.SelectedModel(); !ok || got != (ModelRef{ProviderID: "jiyuan", ModelID: "deepseek-v4-flash-0731"}) {
+			t.Fatalf("message selected model mismatch: role=%s got=%+v ok=%v info=%+v", message.Info.Role, got, ok, message.Info)
+		}
+	}
+	if !messages[1].Info.HasError() {
+		t.Fatalf("assistant error state was not preserved: %+v", messages[1].Info)
+	}
+}
+
 func TestWaitReadyRejectsTCPListenOnlyAndClassifiesTimeout(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { http.NotFound(w, r) }))
 	defer server.Close()

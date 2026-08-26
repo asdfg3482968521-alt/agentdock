@@ -74,6 +74,7 @@ type NativeClient interface {
 	AbortNativeExecution(context.Context, string, string) error
 	ContinueNativeConversation(context.Context, string, string, opencodenative.PromptRequest) error
 	DiscoverNativeProviderModelMetadata(context.Context, string) (json.RawMessage, error)
+	DiscoverNativeModels(context.Context, string) (opencodenative.ModelDiscovery, error)
 }
 
 type Options struct {
