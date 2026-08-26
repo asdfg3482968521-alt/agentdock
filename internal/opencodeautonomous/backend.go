@@ -104,6 +104,7 @@ func (b *OpenCodeAutonomousBackend) Run(ctx context.Context, request Request, si
 	binding, err := b.bridge.Start(runCtx, nativebridge.StartRequest{
 		AgentDockSessionID: request.AgentDockSessionID,
 		ClientRequestID:    request.AgentID,
+		SubagentID:         request.AgentID,
 		Workspace:          request.Workspace,
 		Provider:           request.Provider,
 		Model:              request.Model,
@@ -272,7 +273,7 @@ func highLevelPrompt(task string, constraints []string) string {
 
 func executionContextSystemPrompt(workspace, permissionMode string) string {
 	return fmt.Sprintf(
-		"AgentDock owns the execution boundary. Use exact workspace \"%s\" as cwd. Permission mode is \"%s\". Workspace reads/writes are allowed only within the granted mode. Ordinary external paths are read-only unless an explicit bounded writable mount exists; protected, secret, and system paths must not be modified. Do not widen permissions or replace the AgentDock sandbox contract.",
+		"AgentDock owns the execution boundary. Use exact workspace \"%s\" as cwd. Permission mode is \"%s\". Workspace reads/writes are allowed only within the granted mode. Ordinary external paths are read-only unless an explicit bounded writable mount exists; protected, secret, and system paths must not be modified. Do not widen permissions or replace the AgentDock ownership and permission contract.",
 		workspace, permissionMode,
 	)
 }

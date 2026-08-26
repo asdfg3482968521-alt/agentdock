@@ -109,7 +109,7 @@ func TestRunUsesHighLevelTaskAndExactRootBinding(t *testing.T) {
 		t.Fatalf("Start calls=%d want=1", len(bridge.starts))
 	}
 	start := bridge.starts[0]
-	if start.AgentDockSessionID != "session-1" || start.ClientRequestID != "agent-1" || start.Workspace != `C:\work\project` {
+	if start.AgentDockSessionID != "session-1" || start.ClientRequestID != "agent-1" || start.SubagentID != "agent-1" || start.Workspace != `C:\work\project` {
 		t.Fatalf("Start=%+v", start)
 	}
 	if start.Provider != "opencode" || start.Model != "mimo-v2.5-free" || start.ExecutionMode != ExecutionModeAutonomous {

@@ -25,6 +25,7 @@ import (
 	mcpclient "github.com/uvwt/agentdock/internal/mcp/client"
 	"github.com/uvwt/agentdock/internal/nativebridge"
 	opencoderuntime "github.com/uvwt/agentdock/internal/opencode"
+	"github.com/uvwt/agentdock/internal/opencodeautonomous"
 	"github.com/uvwt/agentdock/internal/opencodenative"
 	sessionruntime "github.com/uvwt/agentdock/internal/session"
 	"github.com/uvwt/agentdock/internal/taskstate"
@@ -54,6 +55,7 @@ type Runtime struct {
 	dynamicMCP       *toolmcp.Service
 	openCode         *opencoderuntime.Supervisor
 	nativeSupervisor d3Supervisor
+	nativeAutonomous d3NativeAutonomousRunner
 	jobs             *jobruntime.Manager
 	sessions         *sessionruntime.Manager
 	agents           *agentruntime.Manager
@@ -131,6 +133,12 @@ func NewRuntime(cfg config.Config) (*Runtime, error) {
 			return nil, fmt.Errorf("initialize D3 native supervisor bridge: %w", bridgeErr)
 		}
 		runtime.nativeSupervisor = bridge
+		autonomousBackend, autonomousErr := opencodeautonomous.New(bridge)
+		if autonomousErr != nil {
+			_ = runtime.Close()
+			return nil, fmt.Errorf("initialize D3 native autonomous backend: %w", autonomousErr)
+		}
+		runtime.nativeAutonomous = autonomousBackend
 	}
 	if cfg.OpenCodeEnabled {
 		supervisor, err := opencoderuntime.NewSupervisor(context.Background(), opencoderuntime.Options{
@@ -174,6 +182,7 @@ func NewRuntime(cfg config.Config) (*Runtime, error) {
 		}
 		agentBackends["opencode"] = opencodeBackend
 	}
+	addD3NativeAutonomousAgentBackend(agentBackends, runtime.nativeAutonomous)
 	agentManager, err := agentruntime.NewManager(context.Background(), agentruntime.ManagerOptions{
 		StorageRoot: filepath.Join(cfg.AgentDockHome, "agents"),
 		Sessions:    newAgentSessionResolver(runtime),
@@ -184,7 +193,7 @@ func NewRuntime(cfg config.Config) (*Runtime, error) {
 		},
 		Backends: agentBackends,
 		Tools:    newAgentToolBridge(runtime),
-		Limits:   agentruntime.DefaultAgentLimits(),
+		Limits:   d3G1AgentLimits(runtime.nativeAutonomous != nil),
 	})
 	if err != nil {
 		_ = runtime.Close()

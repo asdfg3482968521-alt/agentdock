@@ -16,7 +16,8 @@ const (
 )
 
 func routeAgentBackend(provider string) agentBackendRoute {
-	if strings.EqualFold(strings.TrimSpace(provider), string(agentBackendOpenCode)) {
+	provider = strings.ToLower(strings.TrimSpace(provider))
+	if provider == string(agentBackendOpenCode) || provider == "opencode-native" {
 		return agentBackendOpenCode
 	}
 	return agentBackendProvider

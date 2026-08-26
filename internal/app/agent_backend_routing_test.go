@@ -17,6 +17,7 @@ func TestRouteAgentBackend(t *testing.T) {
 	}{
 		{name: "opencode", provider: "opencode", want: agentBackendOpenCode, requiresCredential: false},
 		{name: "opencode normalized", provider: "  OpenCode  ", want: agentBackendOpenCode, requiresCredential: false},
+		{name: "opencode native autonomous", provider: "opencode-native", want: agentBackendOpenCode, requiresCredential: false},
 		{name: "anthropic", provider: "anthropic", want: agentBackendProvider, requiresCredential: true},
 		{name: "deepseek", provider: "deepseek", want: agentBackendProvider, requiresCredential: true},
 		{name: "future provider", provider: "provider-x", want: agentBackendProvider, requiresCredential: true},
