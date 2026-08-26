@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -44,7 +45,7 @@ func TestD3G1RealWindowsProductionABCPoolGate(t *testing.T) {
 			t.Fatal(err)
 		}
 		workspaces[label] = workspace
-		tokens[label] = writeD3G1LiveFixture(t, workspace, label, map[string]int{"A": 20, "B": 60, "C": 25}[label])
+		tokens[label] = writeD3G1LiveFixture(t, workspace, label, d3G1LiveFixtureSleepSeconds(t, label))
 	}
 
 	cfg := config.Config{
@@ -321,6 +322,21 @@ func TestD3G1RealWindowsProductionABCPoolGate(t *testing.T) {
 		agents["C"], bindings["C"].OpenCodeSessionID,
 		correction.Message.Message.MessageSeq, aFollow.Message.MessageSeq, cFollow.Message.MessageSeq,
 	)
+}
+
+func d3G1LiveFixtureSleepSeconds(t *testing.T, label string) int {
+	t.Helper()
+	defaults := map[string]int{"A": 20, "B": 60, "C": 25}
+	seconds := defaults[label]
+	override := strings.TrimSpace(os.Getenv("AGENTDOCK_D3_G1_FIXTURE_SLEEP_SECONDS"))
+	if override == "" {
+		return seconds
+	}
+	parsed, err := strconv.Atoi(override)
+	if err != nil || parsed < 1 {
+		t.Fatalf("AGENTDOCK_D3_G1_FIXTURE_SLEEP_SECONDS must be a positive integer, got %q", override)
+	}
+	return parsed
 }
 
 func writeD3G1LiveFixture(t *testing.T, workspace, label string, sleepSeconds int) string {
