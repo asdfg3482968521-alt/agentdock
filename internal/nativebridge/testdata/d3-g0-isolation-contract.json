@@ -1,0 +1,170 @@
+{
+  "version": "D3-G0-v1",
+  "base_sha": "4cf08c3f76a945b7284e8f19befdda9fb3eb9ab6",
+  "production_pool_implemented": false,
+  "roots": [
+    {
+      "name": "A",
+      "subagent_id": "subagent-A",
+      "agentdock_session_id": "agentdock-session-A",
+      "root_opencode_session_id": "opencode-root-A",
+      "ownership": "EXCLUSIVE_ROOT",
+      "workspace": "workspace-A",
+      "runtime_scope": "session:agentdock-session-A",
+      "status_events_result": "ROOT_SCOPED",
+      "sandbox_profile": "sandbox-A"
+    },
+    {
+      "name": "B",
+      "subagent_id": "subagent-B",
+      "agentdock_session_id": "agentdock-session-B",
+      "root_opencode_session_id": "opencode-root-B",
+      "ownership": "EXCLUSIVE_ROOT",
+      "workspace": "workspace-B",
+      "runtime_scope": "session:agentdock-session-B",
+      "status_events_result": "ROOT_SCOPED",
+      "sandbox_profile": "sandbox-B"
+    },
+    {
+      "name": "C",
+      "subagent_id": "subagent-C",
+      "agentdock_session_id": "agentdock-session-C",
+      "root_opencode_session_id": "opencode-root-C",
+      "ownership": "EXCLUSIVE_ROOT",
+      "workspace": "workspace-C",
+      "runtime_scope": "session:agentdock-session-C",
+      "status_events_result": "ROOT_SCOPED",
+      "sandbox_profile": "sandbox-C"
+    }
+  ],
+  "negative_tests": [
+    {
+      "name": "targeted-correction-a-only",
+      "actor_root": "supervisor",
+      "target": "A",
+      "operation": "message_continue_same_root",
+      "expected": "ALLOW"
+    },
+    {
+      "name": "targeted-cancel-b-only",
+      "actor_root": "supervisor",
+      "target": "B",
+      "operation": "abort_current_execution",
+      "expected": "ALLOW"
+    },
+    {
+      "name": "c-unaffected-by-a-correction-b-cancel",
+      "actor_root": "supervisor",
+      "target": "C",
+      "operation": "observe_after_targeted_A_B_actions",
+      "expected": "UNAFFECTED"
+    },
+    {
+      "name": "cross-root-observe-denied",
+      "actor_root": "A",
+      "target": "B",
+      "operation": "observe",
+      "expected": "DENY"
+    },
+    {
+      "name": "cross-root-message-denied",
+      "actor_root": "A",
+      "target": "B",
+      "operation": "message_continue",
+      "expected": "DENY"
+    },
+    {
+      "name": "cross-root-abort-denied",
+      "actor_root": "A",
+      "target": "B",
+      "operation": "abort",
+      "expected": "DENY"
+    },
+    {
+      "name": "foreign-child-denied",
+      "actor_root": "B",
+      "target": "A.child",
+      "operation": "attach_observe_message_abort",
+      "expected": "DENY"
+    },
+    {
+      "name": "child-not-promoted-to-root",
+      "actor_root": "A",
+      "target": "A.child",
+      "operation": "top_level_registration",
+      "expected": "DENY"
+    },
+    {
+      "name": "workspace-isolation",
+      "actor_root": "A",
+      "target": "B.workspace",
+      "operation": "workspace_route_override",
+      "expected": "DENY"
+    },
+    {
+      "name": "runtime-scope-isolation",
+      "actor_root": "A",
+      "target": "B.runtime_scope",
+      "operation": "runtime_scope_route_override",
+      "expected": "DENY"
+    }
+  ],
+  "sandbox_isolation": [
+    {
+      "name": "external-read-only-not-equal-foreign-write",
+      "actor_root": "A",
+      "target": "external_path_read_only_for_A",
+      "operation": "derive_B_write_permission",
+      "expected": "DENY"
+    },
+    {
+      "name": "external-writable-mount-not-inherited-by-sibling-roots",
+      "actor_root": "B",
+      "target": "A.external_writable_mount",
+      "operation": "inherit_or_reuse_mount",
+      "expected": "DENY"
+    },
+    {
+      "name": "child-inherits-parent-root-sandbox",
+      "actor_root": "A.child",
+      "target": "A.sandbox_profile",
+      "operation": "sandbox_capability_snapshot",
+      "expected": "INHERIT"
+    },
+    {
+      "name": "delete-approval-not-shared-across-roots",
+      "actor_root": "B",
+      "target": "A.delete_approval",
+      "operation": "reuse_delete_approval",
+      "expected": "DENY"
+    },
+    {
+      "name": "external-read-only-root-delete-denied",
+      "actor_root": "A",
+      "target": "external_read_only_root",
+      "operation": "delete",
+      "expected": "DENY"
+    },
+    {
+      "name": "auto-approve-does-not-override-deny",
+      "actor_root": "A",
+      "target": "policy_denied_path",
+      "operation": "auto_approve_override",
+      "expected": "DENY"
+    }
+  ],
+  "restart": {
+    "preserve_exact_roots": true,
+    "lost_root_isolation": true,
+    "child_not_promoted": true
+  },
+  "cursor": {
+    "per_subagent_independent": true
+  },
+  "g1_dependencies": [
+    "D3-C",
+    "D3-D",
+    "D3-F1",
+    "D3-S1"
+  ]
+}
