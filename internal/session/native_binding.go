@@ -44,32 +44,37 @@ type NativeResultRef struct {
 // subagent conversation. OpenCode descendant sessions are provenance of this
 // root binding, not additional AgentDock top-level subagents.
 type NativeSessionBinding struct {
-	SubagentID                 string                  `json:"subagent_id"`
-	AgentDockSessionID         string                  `json:"agentdock_session_id"`
-	ClientRequestID            string                  `json:"client_request_id"`
-	OpenCodeSessionID          string                  `json:"opencode_session_id"`
-	Workspace                  string                  `json:"workspace"`
-	RuntimeScope               string                  `json:"runtime_scope"`
-	PermissionMode             string                  `json:"permission_mode"`
-	Provider                   string                  `json:"provider"`
-	Model                      string                  `json:"model"`
-	ExecutionMode              string                  `json:"execution_mode"`
-	State                      NativeConversationState `json:"state"`
-	ExecutionState             NativeExecutionState    `json:"execution_state"`
-	LastEventCursor            int64                   `json:"last_event_cursor"`
-	CreatedAt                  time.Time               `json:"created_at"`
-	LastActivity               time.Time               `json:"last_activity"`
-	TerminalState              string                  `json:"terminal_state"`
-	ResultRefs                 []NativeResultRef       `json:"result_refs"`
-	CurrentExecutionID         string                  `json:"current_execution_id,omitempty"`
-	LastNativeEventID          string                  `json:"last_native_event_id,omitempty"`
-	LastNativeEventSeq         int64                   `json:"last_native_event_seq,omitempty"`
-	LastNativeMessageID        string                  `json:"last_native_message_id,omitempty"`
-	LastNativePartID           string                  `json:"last_native_part_id,omitempty"`
-	PendingSupervisorMessageID string                  `json:"pending_supervisor_message_id,omitempty"`
-	NativeRuntimeSHA           string                  `json:"native_runtime_sha,omitempty"`
-	NativeServerIdentity       string                  `json:"native_server_identity,omitempty"`
-	NativePublicEvents         []NativePublicEvent     `json:"native_public_events,omitempty"`
+	SubagentID                 string                     `json:"subagent_id"`
+	AgentDockSessionID         string                     `json:"agentdock_session_id"`
+	ClientRequestID            string                     `json:"client_request_id"`
+	OpenCodeSessionID          string                     `json:"opencode_session_id"`
+	Workspace                  string                     `json:"workspace"`
+	RuntimeScope               string                     `json:"runtime_scope"`
+	PermissionMode             string                     `json:"permission_mode"`
+	Provider                   string                     `json:"provider"`
+	Model                      string                     `json:"model"`
+	ExecutionMode              string                     `json:"execution_mode"`
+	State                      NativeConversationState    `json:"state"`
+	ExecutionState             NativeExecutionState       `json:"execution_state"`
+	LastEventCursor            int64                      `json:"last_event_cursor"`
+	CreatedAt                  time.Time                  `json:"created_at"`
+	LastActivity               time.Time                  `json:"last_activity"`
+	TerminalState              string                     `json:"terminal_state"`
+	ResultRefs                 []NativeResultRef          `json:"result_refs"`
+	CurrentExecutionID         string                     `json:"current_execution_id,omitempty"`
+	LastNativeEventID          string                     `json:"last_native_event_id,omitempty"`
+	LastNativeEventSeq         int64                      `json:"last_native_event_seq,omitempty"`
+	LastNativeMessageID        string                     `json:"last_native_message_id,omitempty"`
+	LastNativePartID           string                     `json:"last_native_part_id,omitempty"`
+	PendingSupervisorMessageID string                     `json:"pending_supervisor_message_id,omitempty"`
+	NextSupervisorMessageSeq   int64                      `json:"next_supervisor_message_seq,omitempty"`
+	NextApprovalSeq            int64                      `json:"next_approval_seq,omitempty"`
+	LastOwnedEventCursor       int64                      `json:"last_owned_event_cursor,omitempty"`
+	SupervisorMessages         []NativeSupervisorMessage  `json:"supervisor_messages,omitempty"`
+	PermissionApprovals        []NativePermissionApproval `json:"permission_approvals,omitempty"`
+	NativeRuntimeSHA           string                     `json:"native_runtime_sha,omitempty"`
+	NativeServerIdentity       string                     `json:"native_server_identity,omitempty"`
+	NativePublicEvents         []NativePublicEvent        `json:"native_public_events,omitempty"`
 }
 
 func nativeRuntimeScope(sessionID string) string {
@@ -148,6 +153,9 @@ func normalizeNativeBinding(record Record, binding NativeSessionBinding, now tim
 	}
 	if binding.NativePublicEvents == nil {
 		binding.NativePublicEvents = []NativePublicEvent{}
+	}
+	if err := normalizeNativeMultiturnBinding(&binding); err != nil {
+		return NativeSessionBinding{}, err
 	}
 	return binding, nil
 }
@@ -278,6 +286,17 @@ func cloneNativeSessionBinding(binding NativeSessionBinding) NativeSessionBindin
 	copy.ResultRefs = append([]NativeResultRef(nil), binding.ResultRefs...)
 	if copy.ResultRefs == nil {
 		copy.ResultRefs = []NativeResultRef{}
+	}
+	copy.SupervisorMessages = make([]NativeSupervisorMessage, len(binding.SupervisorMessages))
+	for i, message := range binding.SupervisorMessages {
+		copy.SupervisorMessages[i] = cloneNativeSupervisorMessage(message)
+	}
+	if copy.SupervisorMessages == nil {
+		copy.SupervisorMessages = []NativeSupervisorMessage{}
+	}
+	copy.PermissionApprovals = append([]NativePermissionApproval(nil), binding.PermissionApprovals...)
+	if copy.PermissionApprovals == nil {
+		copy.PermissionApprovals = []NativePermissionApproval{}
 	}
 	copy.NativePublicEvents = make([]NativePublicEvent, len(binding.NativePublicEvents))
 	for i, event := range binding.NativePublicEvents {
