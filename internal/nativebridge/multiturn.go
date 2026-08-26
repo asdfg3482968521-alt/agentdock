@@ -3,6 +3,7 @@ package nativebridge
 import (
 	"context"
 	"encoding/json"
+	"sort"
 	"strings"
 
 	"github.com/uvwt/agentdock/internal/opencodenative"
@@ -95,6 +96,139 @@ func (m *Manager) SubmitSupervisorMessage(ctx context.Context, request Superviso
 	result.Message = accepted
 	result.Dispatched = true
 	return result, nil
+}
+
+func (m *Manager) ReconcileSupervisorMessages(ctx context.Context, agentDockSessionID, subagentID, workspace string) ([]SupervisorMessageResult, error) {
+	agentDockSessionID = strings.TrimSpace(agentDockSessionID)
+	subagentID = strings.TrimSpace(subagentID)
+	workspace = strings.TrimSpace(workspace)
+	if agentDockSessionID == "" || subagentID == "" {
+		return nil, &Error{Code: ErrorInvalid, Message: "agentdock_session_id and subagent_id are required for supervisor reconciliation"}
+	}
+	release := m.acquireKey(supervisorMutationKey(agentDockSessionID, subagentID))
+	defer release()
+
+	binding, _, err := m.Attach(ctx, agentDockSessionID, subagentID, workspace)
+	if err != nil {
+		return nil, err
+	}
+	nativeMessages, err := m.native.ListNativeMessages(ctx, binding.Workspace, binding.OpenCodeSessionID)
+	if err != nil {
+		return nil, &Error{Code: ErrorNative, Message: "list exact native root messages for supervisor reconciliation", Cause: err}
+	}
+	found := make(map[string]string, len(nativeMessages))
+	for _, nativeMessage := range nativeMessages {
+		if id := strings.TrimSpace(nativeMessage.Info.ID); id != "" {
+			found[id] = id
+		}
+	}
+
+	pending := append([]session.NativeSupervisorMessage(nil), binding.SupervisorMessages...)
+	sort.Slice(pending, func(i, j int) bool { return pending[i].MessageSeq < pending[j].MessageSeq })
+	results := make([]SupervisorMessageResult, 0, len(pending))
+	for _, message := range pending {
+		if message.State != session.NativeSupervisorQueued && message.State != session.NativeSupervisorDispatching {
+			continue
+		}
+		result := SupervisorMessageResult{OpenCodeSessionID: binding.OpenCodeSessionID, Message: message}
+		if nativeID, ok := found[message.SupervisorMessageID]; ok {
+			accepted, updateErr := m.sessions.UpdateNativeSupervisorMessage(binding.AgentDockSessionID, binding.SubagentID, message.SupervisorMessageID, func(value *session.NativeSupervisorMessage) error {
+				value.State = session.NativeSupervisorAccepted
+				value.NativeMessageID = nativeID
+				return nil
+			})
+			if updateErr != nil {
+				return nil, m.authorityError("persist reconciled native supervisor message", updateErr)
+			}
+			result.Message = accepted
+			results = append(results, result)
+			continue
+		}
+
+		prompt, decodeErr := decodeDurableSupervisorPrompt(message)
+		if decodeErr != nil {
+			return nil, decodeErr
+		}
+		if message.State == session.NativeSupervisorQueued {
+			if _, updateErr := m.sessions.UpdateNativeSupervisorMessage(binding.AgentDockSessionID, binding.SubagentID, message.SupervisorMessageID, func(value *session.NativeSupervisorMessage) error {
+				value.State = session.NativeSupervisorDispatching
+				return nil
+			}); updateErr != nil {
+				return nil, m.authorityError("persist recovered supervisor dispatch intent", updateErr)
+			}
+		}
+		if err := m.native.ContinueNativeConversation(ctx, binding.Workspace, binding.OpenCodeSessionID, prompt); err != nil {
+			return nil, &Error{Code: ErrorNative, Message: "resend reconciled supervisor message on exact native root", Cause: err}
+		}
+		accepted, updateErr := m.sessions.UpdateNativeSupervisorMessage(binding.AgentDockSessionID, binding.SubagentID, message.SupervisorMessageID, func(value *session.NativeSupervisorMessage) error {
+			value.State = session.NativeSupervisorAccepted
+			value.NativeMessageID = value.SupervisorMessageID
+			return nil
+		})
+		if updateErr != nil {
+			return nil, &Error{Code: ErrorReconciliation, Message: "persist accepted recovered supervisor message", Cause: updateErr}
+		}
+		result.Message = accepted
+		result.Dispatched = true
+		results = append(results, result)
+	}
+	return results, nil
+}
+
+func (m *Manager) MarkSupervisorExecutionTerminal(ctx context.Context, agentDockSessionID, subagentID, workspace, supervisorMessageID, outcome string) (session.NativeSupervisorMessage, error) {
+	agentDockSessionID = strings.TrimSpace(agentDockSessionID)
+	subagentID = strings.TrimSpace(subagentID)
+	supervisorMessageID = strings.TrimSpace(supervisorMessageID)
+	outcome = strings.ToUpper(strings.TrimSpace(outcome))
+	states := map[string]session.NativeExecutionState{
+		"SUCCEEDED":   session.NativeExecutionSucceeded,
+		"FAILED":      session.NativeExecutionFailed,
+		"CANCELLED":   session.NativeExecutionCancelled,
+		"TIMED_OUT":   session.NativeExecutionTimedOut,
+		"INTERRUPTED": session.NativeExecutionInterrupted,
+	}
+	executionState, ok := states[outcome]
+	if agentDockSessionID == "" || subagentID == "" || supervisorMessageID == "" || !ok {
+		return session.NativeSupervisorMessage{}, &Error{Code: ErrorInvalid, Message: "terminal supervisor update requires ids and SUCCEEDED/FAILED/CANCELLED/TIMED_OUT/INTERRUPTED outcome"}
+	}
+	release := m.acquireKey(supervisorMutationKey(agentDockSessionID, subagentID))
+	defer release()
+	binding, _, err := m.Attach(ctx, agentDockSessionID, subagentID, workspace)
+	if err != nil {
+		return session.NativeSupervisorMessage{}, err
+	}
+	var terminal session.NativeSupervisorMessage
+	found := false
+	_, err = m.sessions.UpdateNativeSessionBinding(binding.AgentDockSessionID, binding.SubagentID, func(value *session.NativeSessionBinding) error {
+		if value.State != session.NativeConversationActive {
+			return &Error{Code: ErrorLost, Message: "terminal execution update cannot revive a non-active native conversation"}
+		}
+		for i := range value.SupervisorMessages {
+			if value.SupervisorMessages[i].SupervisorMessageID != supervisorMessageID {
+				continue
+			}
+			value.SupervisorMessages[i].State = session.NativeSupervisorTerminal
+			value.SupervisorMessages[i].TerminalOutcome = outcome
+			value.SupervisorMessages[i].UpdatedAt = m.now().UTC()
+			terminal = value.SupervisorMessages[i]
+			found = true
+			break
+		}
+		if !found {
+			return &Error{Code: ErrorInvalid, Message: "supervisor message not found for terminal execution update"}
+		}
+		value.ExecutionState = executionState
+		value.CurrentExecutionID = ""
+		value.PendingSupervisorMessageID = ""
+		return nil
+	})
+	if err != nil {
+		if ErrorCode(err) != "" {
+			return session.NativeSupervisorMessage{}, err
+		}
+		return session.NativeSupervisorMessage{}, m.authorityError("persist terminal supervisor execution", err)
+	}
+	return terminal, nil
 }
 
 func decodeDurableSupervisorPrompt(message session.NativeSupervisorMessage) (opencodenative.PromptRequest, error) {

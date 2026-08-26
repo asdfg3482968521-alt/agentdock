@@ -16,8 +16,10 @@ import (
 )
 
 type multiturnFixture struct {
+	root    string
 	bridge  *Manager
 	store   *session.Manager
+	client  *opencodenative.Client
 	harness *nativeHarness
 	record  session.Record
 	binding session.NativeSessionBinding
@@ -65,7 +67,27 @@ func newMultiturnFixture(t *testing.T) multiturnFixture {
 	if err != nil {
 		t.Fatal(err)
 	}
-	return multiturnFixture{bridge: bridge, store: store, harness: harness, record: record, binding: binding}
+	return multiturnFixture{root: root, bridge: bridge, store: store, client: client, harness: harness, record: record, binding: binding}
+}
+
+func (f multiturnFixture) restartedBridge(t *testing.T) (*session.Manager, *Manager) {
+	t.Helper()
+	store, err := session.NewManager(context.Background(), session.Config{
+		StorageRoot: filepath.Join(f.root, "sessions"), WorktreeRoot: filepath.Join(f.root, "worktrees"), Git: testGit{},
+		IDFactory: func() string { return "unused-after-restart" },
+		Now:       func() time.Time { return time.Date(2026, 8, 26, 4, 30, 0, 0, time.UTC) },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	bridge, err := New(Options{
+		Sessions: store, Native: f.client, SubagentIDFactory: func() string { return "must-not-create-replacement" },
+		NativeRuntimeSHA: "runtime-f1", NativeServerIdentity: "restart",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return store, bridge
 }
 
 func (f multiturnFixture) request(clientID, kind, text string) SupervisorMessageRequest {
