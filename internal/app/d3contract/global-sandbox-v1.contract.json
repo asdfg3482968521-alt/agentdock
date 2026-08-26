@@ -1,0 +1,140 @@
+{
+  "contract_version": "GLOBAL_SANDBOX_V1",
+  "base_sha": "4cf08c3f76a945b7284e8f19befdda9fb3eb9ab6",
+  "phase": "D3-S0",
+  "status": "CONTRACT_ONLY_NOT_PRODUCTION_ENFORCEMENT",
+  "decisions": ["ALLOW", "ASK", "HIGH_RISK_ASK", "DENY"],
+  "capability_model": {
+    "required_root_fields": ["read_roots", "write_roots", "delete_roots", "protected_roots"],
+    "workspace": {
+      "read": "ALLOW",
+      "write": "ALLOW",
+      "delete": "CONTROLLED"
+    },
+    "external_non_protected": {
+      "read": "ALLOW",
+      "write": "DENY_BY_DEFAULT",
+      "delete": "DENY_BY_DEFAULT"
+    },
+    "other_project": {
+      "read": "ALLOW",
+      "write": "DENY_BY_DEFAULT",
+      "delete": "DENY_BY_DEFAULT"
+    },
+    "other_active_agentdock_session": {
+      "read": "DENY_BY_DEFAULT",
+      "explicit_read_only_grant": "ALLOW_READ_ONLY",
+      "write": "DENY",
+      "delete": "DENY"
+    },
+    "external_writable_mount": {
+      "grantable": true,
+      "read": "ALLOW",
+      "write": "ALLOW",
+      "delete": "ACCORDING_TO_BOUNDED_GRANT",
+      "scope": "CANONICAL_ROOT_ONLY",
+      "sibling_inheritance": false,
+      "revocable": true,
+      "expirable": true,
+      "protected_roots_override_grant": true,
+      "other_active_session_write_override": false
+    },
+    "protected": {
+      "read": "DENY",
+      "write": "DENY",
+      "delete": "DENY",
+      "whole_userprofile_is_protected": false,
+      "categories": [
+        "credential_token_password_stores",
+        "ssh_private_keys",
+        "opencode_agentdock_auth_secrets",
+        "browser_secrets",
+        "system_sensitive_paths",
+        "explicit_secret_files"
+      ]
+    }
+  },
+  "precedence": [
+    "INVALID_OR_UNRESOLVED_PATH_DENY",
+    "PROTECTED_ROOT_HARD_DENY",
+    "OTHER_ACTIVE_SESSION_OWNERSHIP_GUARD",
+    "WORKSPACE_ROOT_DELETE_HARD_DENY",
+    "EXPLICIT_BOUNDED_GRANT",
+    "DESIGNATED_DISPOSABLE_DELETE",
+    "WORKSPACE_DEFAULTS",
+    "EXTERNAL_NON_PROTECTED_DEFAULTS"
+  ],
+  "delete_policy": {
+    "agent_owned_disposable": "ALLOW",
+    "normal_workspace_file": "ASK",
+    "normal_workspace_directory_non_recursive": "ASK",
+    "recursive_or_bulk": "HIGH_RISK_ASK",
+    "workspace_root": "DENY",
+    "external_read_only": "DENY",
+    "external_writable_mount": "ACCORDING_TO_BOUNDED_GRANT",
+    "disposable_classification_is_name_only": false,
+    "bounded_approval_required_fields": ["canonical_targets", "operation", "scope", "expires_at"]
+  },
+  "approval_policy": {
+    "ask_may_auto_approve": true,
+    "high_risk_ask_may_auto_approve": false,
+    "hard_deny_overridable": false,
+    "auto_approve_overrides_deny": false,
+    "approval_is_bounded": true,
+    "approval_reuse_outside_exact_scope": false
+  },
+  "canonical_path_policy": {
+    "canonicalize_before_policy": true,
+    "windows_case_insensitive": true,
+    "dotdot_collapsed_before_classification": true,
+    "symlink_components_resolved": true,
+    "junction_reparse_components_resolved": true,
+    "write_delete_rechecked_after_resolution": true,
+    "missing_write_target_uses_deepest_existing_ancestor": true,
+    "unc_supported_and_classified": true,
+    "extended_unc_normalized": true,
+    "drive_relative_paths_rejected": true,
+    "device_namespace_aliases_rejected_or_normalized_before_policy": true,
+    "filesystem_root_never_implicit_workspace": true,
+    "legal_external_read_only_must_remain_usable": true
+  },
+  "shell_destructive_policy": {
+    "path_aware": true,
+    "content_filter_all_shell": false,
+    "commands": [
+      "rm",
+      "del",
+      "erase",
+      "rd",
+      "rmdir",
+      "Remove-Item",
+      "Clear-Content",
+      "truncate",
+      "git clean",
+      "git reset --hard",
+      "git checkout -- .",
+      "git restore",
+      "git rm"
+    ],
+    "unresolved_destructive_target": "DENY_UNTIL_RESOLVED",
+    "normal_workspace_single_target": "ASK",
+    "recursive_or_bulk_workspace_target": "HIGH_RISK_ASK",
+    "workspace_root_target": "DENY",
+    "external_read_only_target": "DENY",
+    "protected_target": "DENY"
+  },
+  "child_policy": {
+    "inherits_root_sandbox": true,
+    "inherits_capability_ceiling": true,
+    "child_self_elevation": "DENY",
+    "child_may_narrow_capabilities": true,
+    "child_may_add_write_mount": false,
+    "root_authority_may_update_bounded_grants": true,
+    "descendant_tool_calls_use_same_enforcement_boundary": true
+  },
+  "truthfulness": {
+    "windows_job_object_is_filesystem_sandbox": false,
+    "os_level_filesystem_virtualization_claim_allowed_without_implementation": false,
+    "opencode_runtime_source_change_authorized": false
+  }
+}
