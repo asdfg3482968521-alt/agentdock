@@ -1,0 +1,1 @@
+Trigger Windows build for fail-open AgentDock startup v3.
