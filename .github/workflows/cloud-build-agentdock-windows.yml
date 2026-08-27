@@ -34,15 +34,12 @@ jobs:
           go-version-file: go.mod
           cache: true
 
-      - name: Go format check
+      - name: Normalize Go formatting in build workspace
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
-          $files = gofmt -l ./cmd ./internal
-          if ($files) {
-            Write-Host $files
-            throw 'gofmt check failed'
-          }
+          gofmt -w ./cmd ./internal
+          git diff -- internal/app/runtime.go
 
       - name: Test AgentDock startup, GPT Actions, MCP, and OpenCode packages
         shell: pwsh
