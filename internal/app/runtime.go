@@ -249,10 +249,10 @@ func NewRuntime(cfg config.Config) (*Runtime, error) {
 	runtime.dynamicMCP = toolmcp.New(mcpClients, envs)
 	runtime.media = toolmedia.New(cfg, ws, runtime.command.InternalCommandEnv)
 	runtime.browser = toolbrowser.New(toolbrowser.Config{
-		AgentDockHome:         cfg.AgentDockHome,
-		ExecutablePath:        cfg.BrowserExecutablePath,
-		CDPURL:                cfg.BrowserCDPURL,
-		ReuseExistingCDP:      cfg.BrowserReuseExistingCDP,
+		AgentDockHome:    cfg.AgentDockHome,
+		ExecutablePath:   cfg.BrowserExecutablePath,
+		CDPURL:           cfg.BrowserCDPURL,
+		ReuseExistingCDP: cfg.BrowserReuseExistingCDP,
 	})
 	runtime.recall = toolrecall.New(func() config.Config { return runtime.cfg })
 	runtime.evolution = evolution.New(func() config.Config { return runtime.cfg }, tasks)
@@ -275,9 +275,9 @@ func NewRuntime(cfg config.Config) (*Runtime, error) {
 				Home:       cfg.AgentDockHome,
 				DefaultCWD: cfg.AgentDockDefaultDir,
 				Agent: acpruntime.AgentSpec{
-					Name: cfg.ACPAgentName,
-					Command: cfg.ACPCommand,
-					Args: append([]string(nil), cfg.ACPArgs...),
+					Name:        cfg.ACPAgentName,
+					Command:     cfg.ACPCommand,
+					Args:        append([]string(nil), cfg.ACPArgs...),
 					Environment: acpEnvironment,
 				},
 				MaxConcurrentRuns:  cfg.ACPMaxPrompts,
@@ -324,16 +324,16 @@ func (r *Runtime) subsystemStatus() map[string]any {
 		return map[string]any{}
 	}
 	return map[string]any{
-		"session":              r.sessions != nil,
-		"job":                  r.jobs != nil,
-		"agent":                r.agents != nil,
-		"credential_store":     r.credentialStore != nil,
-		"opencode_execution":   r.openCode != nil,
-		"opencode_native":      r.nativeSupervisor != nil,
-		"opencode_autonomous":  r.nativeAutonomous != nil,
-		"acp":                  r.acp != nil,
-		"dynamic_mcp":          r.dynamicMCP != nil,
-		"browser":              r.browser != nil,
+		"session":             r.sessions != nil,
+		"job":                 r.jobs != nil,
+		"agent":               r.agents != nil,
+		"credential_store":    r.credentialStore != nil,
+		"opencode_execution":  r.openCode != nil,
+		"opencode_native":     r.nativeSupervisor != nil,
+		"opencode_autonomous": r.nativeAutonomous != nil,
+		"acp":                 r.acp != nil,
+		"dynamic_mcp":         r.dynamicMCP != nil,
+		"browser":             r.browser != nil,
 	}
 }
 
