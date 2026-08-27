@@ -44,11 +44,11 @@ jobs:
             throw 'gofmt check failed'
           }
 
-      - name: Test GPT Actions and MCP packages
+      - name: Test GPT Actions, MCP, and OpenCode runtime packages
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
-          go test ./internal/httpx ./internal/mcp
+          go test ./internal/httpx ./internal/mcp ./internal/opencode
 
       - name: Build AgentDock
         shell: pwsh
