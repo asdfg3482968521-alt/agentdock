@@ -66,6 +66,36 @@ func (s *Server) HTTPHandler() http.Handler {
 	return s.httpHandler
 }
 
+// ToolDescriptors exposes the currently available AgentDock tool catalog for
+// non-MCP transports such as GPT Actions. It uses the same runtime availability
+// filter and metadata as the MCP server, so there is no second tool registry.
+func (s *Server) ToolDescriptors() []map[string]any {
+	if s == nil || s.runtime == nil {
+		return []map[string]any{}
+	}
+	return toolDescriptorsForNames(s.runtime.ToolNames())
+}
+
+// CallToolDirect dispatches a tool inside the AgentDock process without
+// round-tripping through /mcp. GPT Actions therefore share the exact same
+// Runtime.Call path, panic containment, logging and tool envelope as MCP.
+func (s *Server) CallToolDirect(ctx context.Context, name string, arguments map[string]any) map[string]any {
+	started := time.Now()
+	requestID := fmt.Sprintf("%s-gpt-%d", s.instanceID, s.requestSeq.Add(1))
+	plane := toolRequestPlane(name)
+	if arguments == nil {
+		arguments = map[string]any{}
+	}
+	slog.Info("GPT Action tool started", "request_id", requestID, "server_instance", s.instanceID, "tool", name, "plane", plane)
+	result, err := s.invokeTool(ctx, name, arguments, requestID, plane)
+	finishedAttrs := []any{"request_id", requestID, "server_instance", s.instanceID, "tool", name, "plane", plane, "duration_ms", time.Since(started).Milliseconds(), "ok", err == nil}
+	if err != nil {
+		finishedAttrs = append(finishedAttrs, "error", err)
+	}
+	slog.Info("GPT Action tool finished", finishedAttrs...)
+	return toolEnvelope(name, result, err)
+}
+
 func (s *Server) ServeStdio(in io.Reader, out io.Writer) error {
 	if s == nil || s.sdk == nil {
 		return errors.New("MCP server is not initialized")
