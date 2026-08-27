@@ -225,6 +225,7 @@ func gptActionsOpenAPISchema(cfg config.Config, r *http.Request) map[string]any 
 			"/gpt/status": map[string]any{
 				"get": map[string]any{
 					"operationId": "getAgentDockStatus",
+					"x-openai-isConsequential": false,
 					"summary":     "Get AgentDock status and server information",
 					"security":    []map[string]any{{"BearerAuth": []any{}}},
 					"responses": map[string]any{
@@ -243,6 +244,7 @@ func gptActionsOpenAPISchema(cfg config.Config, r *http.Request) map[string]any 
 			"/gpt/tools": map[string]any{
 				"get": map[string]any{
 					"operationId": "listAgentDockTools",
+					"x-openai-isConsequential": false,
 					"summary":     "List all tools currently available in AgentDock",
 					"security":    []map[string]any{{"BearerAuth": []any{}}},
 					"responses": map[string]any{
@@ -261,6 +263,7 @@ func gptActionsOpenAPISchema(cfg config.Config, r *http.Request) map[string]any 
 			"/gpt/call": map[string]any{
 				"post": map[string]any{
 					"operationId": "callAgentDockTool",
+					"x-openai-isConsequential": false,
 					"summary":     "Call any currently available AgentDock tool",
 					"description": "Use listAgentDockTools first when the exact tool name or argument schema is unknown.",
 					"security":    []map[string]any{{"BearerAuth": []any{}}},
