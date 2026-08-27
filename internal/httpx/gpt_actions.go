@@ -142,16 +142,11 @@ func gptActionsOpenAPISchema(cfg config.Config, r *http.Request) map[string]any 
 	if baseURL == "" {
 		baseURL = fmt.Sprintf("http://127.0.0.1:%d", cfg.Port)
 	}
-	objectSchema := map[string]any{"type": "object", "additionalProperties": true}
-	successResponse := map[string]any{
-		"description": "Successful AgentDock response",
-		"content": map[string]any{
-			"application/json": map[string]any{"schema": objectSchema},
-		},
-	}
+
 	unauthorizedResponse := map[string]any{
 		"description": "Missing or invalid AgentDock Bearer token",
 	}
+
 	return map[string]any{
 		"openapi": "3.1.0",
 		"info": map[string]any{
@@ -168,6 +163,63 @@ func gptActionsOpenAPISchema(cfg config.Config, r *http.Request) map[string]any 
 					"bearerFormat": "AgentDock token",
 				},
 			},
+			"schemas": map[string]any{
+				"ToolCallRequest": map[string]any{
+					"type":                 "object",
+					"additionalProperties": false,
+					"required":             []string{"tool"},
+					"properties": map[string]any{
+						"tool": map[string]any{
+							"type":        "string",
+							"description": "Exact AgentDock tool name returned by listAgentDockTools.",
+						},
+						"arguments": map[string]any{
+							"type":                 "object",
+							"description":          "Arguments for the selected AgentDock tool.",
+							"properties":           map[string]any{},
+							"additionalProperties": true,
+						},
+					},
+				},
+				"ActionResponse": map[string]any{
+					"type":                 "object",
+					"additionalProperties": true,
+					"properties": map[string]any{
+						"ok": map[string]any{
+							"type":        "boolean",
+							"description": "Whether the AgentDock request completed successfully.",
+						},
+						"tool": map[string]any{
+							"type":        "string",
+							"description": "Tool name for a tool-call response.",
+						},
+						"count": map[string]any{
+							"type":        "integer",
+							"description": "Number of tools returned by listAgentDockTools.",
+						},
+						"tools": map[string]any{
+							"type":        "array",
+							"description": "Currently available AgentDock tools.",
+							"items": map[string]any{
+								"type":                 "object",
+								"additionalProperties": true,
+								"properties": map[string]any{
+									"name":        map[string]any{"type": "string"},
+									"title":       map[string]any{"type": "string"},
+									"description": map[string]any{"type": "string"},
+								},
+							},
+						},
+						"result": map[string]any{
+							"description": "Structured AgentDock result. Shape depends on the selected tool.",
+						},
+						"error": map[string]any{
+							"type":        "string",
+							"description": "Error message when the Action request itself is invalid.",
+						},
+					},
+				},
+			},
 		},
 		"paths": map[string]any{
 			"/gpt/status": map[string]any{
@@ -176,7 +228,14 @@ func gptActionsOpenAPISchema(cfg config.Config, r *http.Request) map[string]any 
 					"summary":     "Get AgentDock status and server information",
 					"security":    []map[string]any{{"BearerAuth": []any{}}},
 					"responses": map[string]any{
-						"200": successResponse,
+						"200": map[string]any{
+							"description": "AgentDock status response",
+							"content": map[string]any{
+								"application/json": map[string]any{
+									"schema": map[string]any{"$ref": "#/components/schemas/ActionResponse"},
+								},
+							},
+						},
 						"401": unauthorizedResponse,
 					},
 				},
@@ -187,7 +246,14 @@ func gptActionsOpenAPISchema(cfg config.Config, r *http.Request) map[string]any 
 					"summary":     "List all tools currently available in AgentDock",
 					"security":    []map[string]any{{"BearerAuth": []any{}}},
 					"responses": map[string]any{
-						"200": successResponse,
+						"200": map[string]any{
+							"description": "AgentDock tool catalog",
+							"content": map[string]any{
+								"application/json": map[string]any{
+									"schema": map[string]any{"$ref": "#/components/schemas/ActionResponse"},
+								},
+							},
+						},
 						"401": unauthorizedResponse,
 					},
 				},
@@ -202,27 +268,19 @@ func gptActionsOpenAPISchema(cfg config.Config, r *http.Request) map[string]any 
 						"required": true,
 						"content": map[string]any{
 							"application/json": map[string]any{
-								"schema": map[string]any{
-									"type":                 "object",
-									"additionalProperties": false,
-									"required":             []string{"tool"},
-									"properties": map[string]any{
-										"tool": map[string]any{
-											"type":        "string",
-											"description": "Exact AgentDock tool name returned by listAgentDockTools.",
-										},
-										"arguments": map[string]any{
-											"type":                 "object",
-											"description":          "Arguments for the selected AgentDock tool.",
-											"additionalProperties": true,
-										},
-									},
-								},
+								"schema": map[string]any{"$ref": "#/components/schemas/ToolCallRequest"},
 							},
 						},
 					},
 					"responses": map[string]any{
-						"200": successResponse,
+						"200": map[string]any{
+							"description": "AgentDock tool call response",
+							"content": map[string]any{
+								"application/json": map[string]any{
+									"schema": map[string]any{"$ref": "#/components/schemas/ActionResponse"},
+								},
+							},
+						},
 						"400": map[string]any{"description": "Invalid Action request"},
 						"401": unauthorizedResponse,
 					},
