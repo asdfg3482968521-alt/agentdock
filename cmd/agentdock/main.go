@@ -205,10 +205,14 @@ func runServer(ctx context.Context, args []string, stderr io.Writer) error {
 		return err
 	}
 	logx.Setup(cfg.LogLevel)
-	if err := selfupdate.RepairDesktopRuntimeIfNeeded(ctx, stderr); err != nil {
-		// Windows v0.7.4 及更早版本只会替换 core。新版 core 启动时尝试补齐同版本控制面板，
-		// 失败不应阻断 MCP 服务启动；保留明确日志并在下次启动继续重试。
-		slog.Warn("desktop runtime repair skipped", "error", err)
+	if desktopRuntimeRepairEnabled() {
+		if err := selfupdate.RepairDesktopRuntimeIfNeeded(ctx, stderr); err != nil {
+			// Windows v0.7.4 及更早版本只会替换 core。新版 core 启动时尝试补齐同版本控制面板，
+			// 失败不应阻断 MCP 服务启动；保留明确日志并在下次启动继续重试。
+			slog.Warn("desktop runtime repair skipped", "error", err)
+		}
+	} else {
+		slog.Info("desktop runtime repair disabled by environment")
 	}
 	slog.Info("server starting", "agentdock_home", cfg.AgentDockHome, "agentdock_default_dir", cfg.AgentDockDefaultDir, "path_model", config.PathModel, "host", cfg.Host, "port", cfg.Port, "stdio", cfg.Stdio, "log_level", cfg.LogLevel, "recall_enabled", cfg.NexusEndpoint != "", "nexus_enabled", cfg.NexusEndpoint != "", "browser_enabled", cfg.BrowserEnabled)
 	runtime, err := app.NewRuntime(cfg)
@@ -242,6 +246,10 @@ func runServer(ctx context.Context, args []string, stderr io.Writer) error {
 	cancel()
 	<-done
 	return err
+}
+
+func desktopRuntimeRepairEnabled() bool {
+	return strings.TrimSpace(os.Getenv("AGENTDOCK_SKIP_DESKTOP_RUNTIME_REPAIR")) != "1"
 }
 
 func serveStdio(ctx context.Context, server *mcp.Server) error {

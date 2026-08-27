@@ -73,3 +73,14 @@ func TestRunTunnelRequiresRuntimeRoot(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 }
+
+func TestDesktopRuntimeRepairEnabled(t *testing.T) {
+	t.Setenv("AGENTDOCK_SKIP_DESKTOP_RUNTIME_REPAIR", "1")
+	if desktopRuntimeRepairEnabled() {
+		t.Fatal("desktop runtime repair should be disabled when explicitly skipped")
+	}
+	t.Setenv("AGENTDOCK_SKIP_DESKTOP_RUNTIME_REPAIR", "")
+	if !desktopRuntimeRepairEnabled() {
+		t.Fatal("desktop runtime repair should be enabled by default")
+	}
+}
