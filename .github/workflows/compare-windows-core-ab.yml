@@ -1,0 +1,153 @@
+name: Compare Windows Core - 5780 vs GPT Actions
+
+on:
+  pull_request:
+    branches:
+      - production-current-agentdock
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  compare:
+    name: Same-runner A/B comparison
+    runs-on: windows-latest
+    timeout-minutes: 25
+
+    steps:
+      - name: Checkout trigger branch
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Prepare exact source trees
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          git fetch --no-tags origin 5780e19fb061ce4fb87af2b1d5d72891e4aaa94a 393477e508329fc0c4b1a233395c46018e053d8d
+          New-Item -ItemType Directory -Path compare -Force | Out-Null
+          git worktree add --detach compare/base 5780e19fb061ce4fb87af2b1d5d72891e4aaa94a
+          git worktree add --detach compare/gpt 393477e508329fc0c4b1a233395c46018e053d8d
+
+      - name: Verify source relationship
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $base = (git -C compare/base rev-parse HEAD).Trim()
+          $gpt = (git -C compare/gpt rev-parse HEAD).Trim()
+          if ($base -ne '5780e19fb061ce4fb87af2b1d5d72891e4aaa94a') { throw "Base SHA mismatch: $base" }
+          if ($gpt -ne '393477e508329fc0c4b1a233395c46018e053d8d') { throw "GPT SHA mismatch: $gpt" }
+          $mergeBase = (git merge-base $base $gpt).Trim()
+          if ($mergeBase -ne $base) { throw "GPT commit is not based directly on requested base; merge-base=$mergeBase" }
+          git diff --stat $base $gpt
+
+      - name: Test both source trees
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          Push-Location compare/base
+          try { go test ./internal/httpx ./internal/mcp } finally { Pop-Location }
+          Push-Location compare/gpt
+          try { go test ./internal/httpx ./internal/mcp } finally { Pop-Location }
+
+      - name: Build both with identical flags
+        shell: pwsh
+        env:
+          CGO_ENABLED: '0'
+          GOOS: windows
+          GOARCH: amd64
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $fixedBuildDate = '2026-08-27T00:00:00Z'
+          $targets = @(
+            @{ Name='base'; Sha='5780e19fb061ce4fb87af2b1d5d72891e4aaa94a' },
+            @{ Name='gpt';  Sha='393477e508329fc0c4b1a233395c46018e053d8d' }
+          )
+          New-Item -ItemType Directory -Path artifacts -Force | Out-Null
+
+          foreach ($target in $targets) {
+            $name = $target.Name
+            $sha = $target.Sha
+            $source = Join-Path 'compare' $name
+            $output = Join-Path 'artifacts' ("agentdock-" + $name + ".exe")
+            $ldflags = "-s -w -X github.com/uvwt/agentdock/internal/buildinfo.Commit=$sha -X github.com/uvwt/agentdock/internal/buildinfo.BuildDate=$fixedBuildDate"
+            Push-Location $source
+            try {
+              go build -trimpath -ldflags $ldflags -o (Join-Path $env:GITHUB_WORKSPACE $output) ./cmd/agentdock
+            } finally {
+              Pop-Location
+            }
+          }
+
+      - name: Compare binary metadata
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $basePath = Resolve-Path .\artifacts\agentdock-base.exe
+          $gptPath = Resolve-Path .\artifacts\agentdock-gpt.exe
+          $baseSize = (Get-Item $basePath).Length
+          $gptSize = (Get-Item $gptPath).Length
+          $delta = $gptSize - $baseSize
+          $baseHash = (Get-FileHash $basePath -Algorithm SHA256).Hash.ToLowerInvariant()
+          $gptHash = (Get-FileHash $gptPath -Algorithm SHA256).Hash.ToLowerInvariant()
+          $baseVersion = (& $basePath version --json | Out-String).Trim()
+          $gptVersion = (& $gptPath version --json | Out-String).Trim()
+
+          $report = @"
+          # AgentDock Windows Core A/B Comparison
+
+          Same GitHub Actions Windows runner, same Go toolchain, same environment:
+          - CGO_ENABLED=0
+          - GOOS=windows
+          - GOARCH=amd64
+          - go build -trimpath
+          - ldflags: -s -w
+          - fixed BuildDate: 2026-08-27T00:00:00Z
+
+          ## A — requested production base
+          SHA: 5780e19fb061ce4fb87af2b1d5d72891e4aaa94a
+          SizeBytes: $baseSize
+          SHA256: $baseHash
+          Version:
+          $baseVersion
+
+          ## B — base + native GPT Actions
+          SHA: 393477e508329fc0c4b1a233395c46018e053d8d
+          SizeBytes: $gptSize
+          SHA256: $gptHash
+          DeltaBytes(B-A): $delta
+          Version:
+          $gptVersion
+          "@
+          $report | Set-Content -LiteralPath .\artifacts\comparison-report.md -Encoding utf8
+
+          [pscustomobject]@{
+            BaseSHA='5780e19fb061ce4fb87af2b1d5d72891e4aaa94a'
+            BaseSizeBytes=$baseSize
+            BaseSHA256=$baseHash
+            GPTSHA='393477e508329fc0c4b1a233395c46018e053d8d'
+            GPTSizeBytes=$gptSize
+            GPTSHA256=$gptHash
+            DeltaBytes=$delta
+          } | ConvertTo-Json | Set-Content -LiteralPath .\artifacts\comparison.json -Encoding utf8
+
+          Write-Host $report
+
+      - name: Upload comparison artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: agentdock-5780-vs-gpt-actions-ab
+          path: |
+            artifacts/agentdock-base.exe
+            artifacts/agentdock-gpt.exe
+            artifacts/comparison-report.md
+            artifacts/comparison.json
+          if-no-files-found: error
+          retention-days: 7
