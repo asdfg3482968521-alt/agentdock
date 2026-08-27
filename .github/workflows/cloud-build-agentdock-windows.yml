@@ -1,0 +1,83 @@
+name: Cloud Build - AgentDock Windows GPT Actions
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - production-current-agentdock
+    paths:
+      - 'cmd/**'
+      - 'internal/**'
+      - 'go.mod'
+      - 'go.sum'
+      - '.github/workflows/cloud-build-agentdock-windows.yml'
+  pull_request:
+    branches:
+      - production-current-agentdock
+
+permissions:
+  contents: read
+
+jobs:
+  build-windows-amd64:
+    name: Build Windows amd64
+    runs-on: windows-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Go format check
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $files = gofmt -l ./cmd ./internal
+          if ($files) {
+            Write-Host $files
+            throw 'gofmt check failed'
+          }
+
+      - name: Test GPT Actions and MCP packages
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          go test ./internal/httpx ./internal/mcp
+
+      - name: Build AgentDock
+        shell: pwsh
+        env:
+          CGO_ENABLED: '0'
+          GOOS: windows
+          GOARCH: amd64
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $buildDate = [DateTime]::UtcNow.ToString('yyyy-MM-ddTHH:mm:ssZ')
+          $sourceCommit = (git rev-parse HEAD).Trim()
+          $ldflags = "-s -w -X github.com/uvwt/agentdock/internal/buildinfo.Commit=$sourceCommit -X github.com/uvwt/agentdock/internal/buildinfo.BuildDate=$buildDate"
+          New-Item -ItemType Directory -Path dist -Force | Out-Null
+          go build -trimpath -ldflags $ldflags -o dist/agentdock.exe ./cmd/agentdock
+          & .\dist\agentdock.exe version --json
+
+      - name: Hash artifact
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $hash = (Get-FileHash -LiteralPath .\dist\agentdock.exe -Algorithm SHA256).Hash.ToLowerInvariant()
+          [IO.File]::WriteAllText('.\dist\agentdock.exe.sha256', "$hash  agentdock.exe`n", [Text.UTF8Encoding]::new($false))
+
+      - name: Upload AgentDock executable
+        uses: actions/upload-artifact@v4
+        with:
+          name: agentdock-windows-amd64-gpt-actions
+          path: |
+            dist/agentdock.exe
+            dist/agentdock.exe.sha256
+          if-no-files-found: error
+          retention-days: 7
