@@ -190,6 +190,7 @@ func TestAgentManagerRejectsChangedRequestForLogicalStartKey(t *testing.T) {
 	manager := testAgentManager(t, ProviderAdapterFunc(func(context.Context, ProviderRequest, func(ProviderEvent) error) (ProviderResult, error) {
 		return ProviderResult{Summary: "done", ResolvedModel: "fake-model", StopReason: "stop"}, nil
 	}), DefaultAgentLimits())
+	defer manager.Close()
 	request := StartRequest{SessionID: "session_a", Provider: "fake", CredentialRef: "cred_fake_default", Prompt: "original", MaxRequests: 1, ClientRequestID: "logical-start-conflict"}
 	if _, err := manager.StartAdmission(context.Background(), request); err != nil {
 		t.Fatal(err)
