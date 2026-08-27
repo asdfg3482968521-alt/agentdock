@@ -44,6 +44,12 @@ import (
 
 type Result = toolcore.Result
 
+type StartupIssue struct {
+	Subsystem string `json:"subsystem"`
+	Error     string `json:"error"`
+}
+
+
 type Runtime struct {
 	cfg              config.Config
 	ws               *workspace.Workspace
@@ -72,6 +78,7 @@ type Runtime struct {
 	closing          bool
 	closeOnce        sync.Once
 	closeErr         error
+	startupIssues    []StartupIssue
 }
 
 func NewRuntime(cfg config.Config) (*Runtime, error) {
@@ -96,144 +103,239 @@ func NewRuntime(cfg config.Config) (*Runtime, error) {
 		_ = mcpClients.Close()
 		return nil, err
 	}
+
 	commandCtx, commandCancel := context.WithCancel(context.Background())
-	sessions := toolcommand.NewSessionStore()
+	commandSessions := toolcommand.NewSessionStore()
 	runtime := &Runtime{
 		cfg: cfg, ws: ws, skills: skills,
-		mcpClients: mcpClients, tasks: tasks, commandCtx: commandCtx, commandCancel: commandCancel,
+		mcpClients: mcpClients, tasks: tasks,
+		commandCtx: commandCtx, commandCancel: commandCancel,
 	}
-	sessionManager, err := sessionruntime.NewManager(context.Background(), sessionruntime.Config{
+
+	// Everything below this point is optional to the HTTP/MCP control plane.
+	// A broken optional subsystem must never prevent AgentDock from listening:
+	// record the failure, keep the subsystem nil, and surface the cause through
+	// server_info / GPT status so the operator can diagnose it after startup.
+	sessionManager, sessionErr := sessionruntime.NewManager(context.Background(), sessionruntime.Config{
 		StorageRoot:  filepath.Join(cfg.AgentDockHome, "sessions", "metadata"),
 		WorktreeRoot: filepath.Join(cfg.AgentDockHome, "sessions", "worktrees"),
 	})
-	if err != nil {
-		_ = runtime.Close()
-		return nil, fmt.Errorf("initialize session manager: %w", err)
+	if sessionErr != nil {
+		runtime.recordStartupIssue("session_runtime", sessionErr)
+	} else {
+		runtime.sessions = sessionManager
 	}
-	runtime.sessions = sessionManager
+
 	if cfg.OpenCodeEnabled && cfg.OpenCodeNativeURL != "" {
-		location, locateErr := (opencoderuntime.ManifestLocator{Path: cfg.OpenCodeRuntimeManifest}).Locate(context.Background())
-		if locateErr != nil {
-			_ = runtime.Close()
-			return nil, fmt.Errorf("initialize D3 native supervisor runtime identity: %w", locateErr)
+		if runtime.sessions == nil {
+			runtime.recordStartupIssue("opencode_native", errors.New("session runtime unavailable; D3 native bridge not initialized"))
+		} else {
+			location, locateErr := (opencoderuntime.ManifestLocator{Path: cfg.OpenCodeRuntimeManifest}).Locate(context.Background())
+			if locateErr != nil {
+				runtime.recordStartupIssue("opencode_native_identity", locateErr)
+			} else {
+				nativeClient, clientErr := opencodenative.NewClient(
+					opencodenative.Config{BaseURL: cfg.OpenCodeNativeURL},
+					&http.Client{Timeout: 3 * time.Minute},
+				)
+				if clientErr != nil {
+					runtime.recordStartupIssue("opencode_native_client", clientErr)
+				} else {
+					bridge, bridgeErr := nativebridge.New(nativebridge.Options{
+						Sessions:             runtime.sessions,
+						Native:               nativeClient,
+						NativeRuntimeSHA:     location.VerifiedSHA,
+						NativeServerIdentity: cfg.OpenCodeNativeURL,
+					})
+					if bridgeErr != nil {
+						runtime.recordStartupIssue("opencode_native_bridge", bridgeErr)
+					} else {
+						runtime.nativeSupervisor = bridge
+						autonomousBackend, autonomousErr := opencodeautonomous.New(bridge)
+						if autonomousErr != nil {
+							runtime.recordStartupIssue("opencode_native_autonomous", autonomousErr)
+						} else {
+							runtime.nativeAutonomous = autonomousBackend
+						}
+					}
+				}
+			}
 		}
-		nativeClient, clientErr := opencodenative.NewClient(opencodenative.Config{BaseURL: cfg.OpenCodeNativeURL}, &http.Client{Timeout: 3 * time.Minute})
-		if clientErr != nil {
-			_ = runtime.Close()
-			return nil, fmt.Errorf("initialize D3 native OpenCode client: %w", clientErr)
-		}
-		bridge, bridgeErr := nativebridge.New(nativebridge.Options{
-			Sessions:             sessionManager,
-			Native:               nativeClient,
-			NativeRuntimeSHA:     location.VerifiedSHA,
-			NativeServerIdentity: cfg.OpenCodeNativeURL,
-		})
-		if bridgeErr != nil {
-			_ = runtime.Close()
-			return nil, fmt.Errorf("initialize D3 native supervisor bridge: %w", bridgeErr)
-		}
-		runtime.nativeSupervisor = bridge
-		autonomousBackend, autonomousErr := opencodeautonomous.New(bridge)
-		if autonomousErr != nil {
-			_ = runtime.Close()
-			return nil, fmt.Errorf("initialize D3 native autonomous backend: %w", autonomousErr)
-		}
-		runtime.nativeAutonomous = autonomousBackend
 	}
+
 	if cfg.OpenCodeEnabled {
-		supervisor, err := opencoderuntime.NewSupervisor(context.Background(), opencoderuntime.Options{
+		supervisor, supervisorErr := opencoderuntime.NewSupervisor(context.Background(), opencoderuntime.Options{
 			Locator: opencoderuntime.ManifestLocator{Path: cfg.OpenCodeRuntimeManifest},
 			LogDir:  cfg.OpenCodeLogDir,
 		})
-		if err != nil {
-			slog.Warn("OpenCode execution plane unavailable during runtime initialization", "plane", "EXECUTION_PLANE", "error", err)
+		if supervisorErr != nil {
+			runtime.recordStartupIssue("opencode_execution", supervisorErr)
 		} else {
 			runtime.openCode = supervisor
 		}
 	}
+
 	jobStorageRoot := cfg.JobStorageRoot
 	if jobStorageRoot == "" {
 		jobStorageRoot = filepath.Join(cfg.AgentDockHome, "jobs")
 	}
-	jobManager, err := jobruntime.NewManager(context.Background(), jobruntime.NewOpenCodeExecutor(runtime.openCode), jobruntime.Config{
-		StorageRoot: jobStorageRoot,
-		Limits:      persistentJobLimits(cfg),
-	})
-	if err != nil {
-		_ = runtime.Close()
-		return nil, fmt.Errorf("initialize persistent job manager: %w", err)
+	jobManager, jobErr := jobruntime.NewManager(
+		context.Background(),
+		jobruntime.NewOpenCodeExecutor(runtime.openCode),
+		jobruntime.Config{
+			StorageRoot: jobStorageRoot,
+			Limits:      persistentJobLimits(cfg),
+		},
+	)
+	if jobErr != nil {
+		runtime.recordStartupIssue("job_runtime", jobErr)
+	} else {
+		runtime.jobs = jobManager
 	}
-	runtime.jobs = jobManager
-	credentialStore, err := credential.NewStore(cfg.AgentDockHome)
-	if err != nil {
-		_ = runtime.Close()
-		return nil, fmt.Errorf("initialize credential store: %w", err)
+
+	credentialStore, credentialErr := credential.NewStore(cfg.AgentDockHome)
+	if credentialErr != nil {
+		runtime.recordStartupIssue("credential_store", credentialErr)
+	} else {
+		runtime.credentialStore = credentialStore
 	}
-	runtime.credentialStore = credentialStore
+
 	agentBackends := map[string]agentruntime.AgentBackend{}
-	if runtime.openCode != nil {
+	if runtime.openCode != nil && runtime.sessions != nil {
 		opencodeBackend, backendErr := newOpenCodeAgentBackend(runtime.openCode, func(sessionID, runtimeScope string) error {
 			_, bindErr := runtime.sessions.SetRuntime(sessionID, runtimeScope)
 			return bindErr
 		})
 		if backendErr != nil {
-			_ = runtime.Close()
-			return nil, fmt.Errorf("initialize OpenCode Agent backend: %w", backendErr)
+			runtime.recordStartupIssue("agent_opencode_backend", backendErr)
+		} else {
+			agentBackends["opencode"] = opencodeBackend
 		}
-		agentBackends["opencode"] = opencodeBackend
 	}
 	addD3NativeAutonomousAgentBackend(agentBackends, runtime.nativeAutonomous)
-	agentManager, err := agentruntime.NewManager(context.Background(), agentruntime.ManagerOptions{
-		StorageRoot: filepath.Join(cfg.AgentDockHome, "agents"),
-		Sessions:    newAgentSessionResolver(runtime),
-		Credentials: credentialStore,
-		Providers: map[string]agentruntime.ProviderAdapter{
-			"anthropic": agentruntime.NewAnthropicProvider(agentruntime.ProviderHTTPOptions{}),
-			"deepseek":  agentruntime.NewDeepSeekProvider(agentruntime.ProviderHTTPOptions{}),
-		},
-		Backends: agentBackends,
-		Tools:    newAgentToolBridge(runtime),
-		Limits:   d3G1AgentLimits(runtime.nativeAutonomous != nil),
-	})
-	if err != nil {
-		_ = runtime.Close()
-		return nil, fmt.Errorf("initialize Agent runtime: %w", err)
+
+	if runtime.sessions == nil {
+		runtime.recordStartupIssue("agent_runtime", errors.New("session runtime unavailable; Agent runtime not initialized"))
+	} else if runtime.credentialStore == nil {
+		runtime.recordStartupIssue("agent_runtime", errors.New("credential store unavailable; Agent runtime not initialized"))
+	} else {
+		agentManager, agentErr := agentruntime.NewManager(context.Background(), agentruntime.ManagerOptions{
+			StorageRoot: filepath.Join(cfg.AgentDockHome, "agents"),
+			Sessions:    newAgentSessionResolver(runtime),
+			Credentials: runtime.credentialStore,
+			Providers: map[string]agentruntime.ProviderAdapter{
+				"anthropic": agentruntime.NewAnthropicProvider(agentruntime.ProviderHTTPOptions{}),
+				"deepseek":  agentruntime.NewDeepSeekProvider(agentruntime.ProviderHTTPOptions{}),
+			},
+			Backends: agentBackends,
+			Tools:    newAgentToolBridge(runtime),
+			Limits:   d3G1AgentLimits(runtime.nativeAutonomous != nil),
+		})
+		if agentErr != nil {
+			runtime.recordStartupIssue("agent_runtime", agentErr)
+		} else {
+			runtime.agents = agentManager
+		}
 	}
-	runtime.agents = agentManager
-	runtime.command = toolcommand.New(func() config.Config { return runtime.cfg }, ws, envs, sessions, skills.ResolveActive, runtime.commandExecutionContext)
+
+	runtime.command = toolcommand.New(
+		func() config.Config { return runtime.cfg },
+		ws,
+		envs,
+		commandSessions,
+		skills.ResolveActive,
+		runtime.commandExecutionContext,
+	)
 	runtime.files = toolfile.New(ws, skills.ResolveResource, runtime.command.CommandEnv)
 	runtime.dynamicMCP = toolmcp.New(mcpClients, envs)
 	runtime.media = toolmedia.New(cfg, ws, runtime.command.InternalCommandEnv)
-	runtime.browser = toolbrowser.New(toolbrowser.Config{AgentDockHome: cfg.AgentDockHome, ExecutablePath: cfg.BrowserExecutablePath, CDPURL: cfg.BrowserCDPURL, ReuseExistingCDP: cfg.BrowserReuseExistingCDP})
+	runtime.browser = toolbrowser.New(toolbrowser.Config{
+		AgentDockHome:         cfg.AgentDockHome,
+		ExecutablePath:        cfg.BrowserExecutablePath,
+		CDPURL:                cfg.BrowserCDPURL,
+		ReuseExistingCDP:      cfg.BrowserReuseExistingCDP,
+	})
 	runtime.recall = toolrecall.New(func() config.Config { return runtime.cfg })
 	runtime.evolution = evolution.New(func() config.Config { return runtime.cfg }, tasks)
 	runtime.taskTools = tooltask.New(func() config.Config { return runtime.cfg }, tasks, runtime.evolution)
+
 	if cfg.ACPEnabled {
 		acpEnvironment := make(map[string]string, len(cfg.ACPEnvFromEnv))
+		acpReady := true
 		for childName, hostName := range cfg.ACPEnvFromEnv {
 			value, exists := os.LookupEnv(hostName)
 			if !exists {
-				_ = runtime.Close()
-				return nil, fmt.Errorf("required ACP environment variable %s is missing", hostName)
+				runtime.recordStartupIssue("acp_runtime", fmt.Errorf("required ACP environment variable %s is missing", hostName))
+				acpReady = false
+				break
 			}
 			acpEnvironment[childName] = value
 		}
-		manager, err := acpruntime.NewManager(acpruntime.Options{
-			Home:       cfg.AgentDockHome,
-			DefaultCWD: cfg.AgentDockDefaultDir,
-			Agent: acpruntime.AgentSpec{
-				Name: cfg.ACPAgentName, Command: cfg.ACPCommand, Args: append([]string(nil), cfg.ACPArgs...), Environment: acpEnvironment,
-			},
-			MaxConcurrentRuns:  cfg.ACPMaxPrompts,
-			InteractionTimeout: time.Duration(cfg.ACPInteractionMS) * time.Millisecond,
-		})
-		if err != nil {
-			_ = runtime.Close()
-			return nil, fmt.Errorf("initialize ACP runtime: %w", err)
+		if acpReady {
+			manager, acpErr := acpruntime.NewManager(acpruntime.Options{
+				Home:       cfg.AgentDockHome,
+				DefaultCWD: cfg.AgentDockDefaultDir,
+				Agent: acpruntime.AgentSpec{
+					Name: cfg.ACPAgentName,
+					Command: cfg.ACPCommand,
+					Args: append([]string(nil), cfg.ACPArgs...),
+					Environment: acpEnvironment,
+				},
+				MaxConcurrentRuns:  cfg.ACPMaxPrompts,
+				InteractionTimeout: time.Duration(cfg.ACPInteractionMS) * time.Millisecond,
+			})
+			if acpErr != nil {
+				runtime.recordStartupIssue("acp_runtime", acpErr)
+			} else {
+				runtime.acp = toolacp.New(manager)
+			}
 		}
-		runtime.acp = toolacp.New(manager)
 	}
+
 	return runtime, nil
+}
+
+func (r *Runtime) recordStartupIssue(subsystem string, err error) {
+	if r == nil || err == nil {
+		return
+	}
+	issue := StartupIssue{
+		Subsystem: strings.TrimSpace(subsystem),
+		Error:     strings.TrimSpace(err.Error()),
+	}
+	r.startupIssues = append(r.startupIssues, issue)
+	slog.Warn(
+		"optional subsystem unavailable; AgentDock continues in degraded mode",
+		"subsystem", issue.Subsystem,
+		"error", issue.Error,
+	)
+}
+
+func (r *Runtime) startupIssueList() []StartupIssue {
+	if r == nil || len(r.startupIssues) == 0 {
+		return []StartupIssue{}
+	}
+	out := make([]StartupIssue, len(r.startupIssues))
+	copy(out, r.startupIssues)
+	return out
+}
+
+func (r *Runtime) subsystemStatus() map[string]any {
+	if r == nil {
+		return map[string]any{}
+	}
+	return map[string]any{
+		"session":              r.sessions != nil,
+		"job":                  r.jobs != nil,
+		"agent":                r.agents != nil,
+		"credential_store":     r.credentialStore != nil,
+		"opencode_execution":   r.openCode != nil,
+		"opencode_native":      r.nativeSupervisor != nil,
+		"opencode_autonomous":  r.nativeAutonomous != nil,
+		"acp":                  r.acp != nil,
+		"dynamic_mcp":          r.dynamicMCP != nil,
+		"browser":              r.browser != nil,
+	}
 }
 
 func persistentJobLimits(cfg config.Config) jobruntime.Limits {
@@ -425,6 +527,10 @@ func (r *Runtime) serverInfo() Result {
 		"opencode_runtimes":   r.openCodeSummaries(),
 		"opencode_tools":      append([]string(nil), opencoderuntime.RequiredTools...),
 		"trusted_proxy_cidrs": append([]string(nil), r.cfg.TrustedProxyCIDRs...),
+
+		"degraded_startup": len(r.startupIssues) > 0,
+		"startup_issues":   r.startupIssueList(),
+		"subsystems":       r.subsystemStatus(),
 
 		"auth_enabled":  r.authEnabled(),
 		"endpoint_path": "/mcp",
