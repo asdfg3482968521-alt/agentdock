@@ -239,6 +239,26 @@ func TestD2AgentStartPublicHandler(t *testing.T) {
 	}
 }
 
+func TestD3AgentStartReplaysSameLogicalStart(t *testing.T) {
+	rt, _, _, _, a, _ := newPublicAgentRuntime(t)
+	args := validPublicAgentStart(a.SessionID)
+	args["client_request_id"] = "logical-start-public-001"
+	first, err := rt.Call(context.Background(), "agent_start", args)
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := rt.Call(context.Background(), "agent_start", args)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first["created"] != true || first["replayed"] != false || second["created"] != false || second["replayed"] != true {
+		t.Fatalf("first=%#v second=%#v", first, second)
+	}
+	if publicAgentFromResult(t, first)["agent_id"] != publicAgentFromResult(t, second)["agent_id"] {
+		t.Fatal("replay changed agent id")
+	}
+}
+
 func TestD2AgentStartRejectsClosedSessionAndPermissionEscalation(t *testing.T) {
 	rt, root, _, _, a, _ := newPublicAgentRuntime(t)
 	if _, err := rt.sessions.Close(context.Background(), a.SessionID); err != nil {

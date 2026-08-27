@@ -162,6 +162,44 @@ func TestAgentManagerRequiresCanonicalSessionBinding(t *testing.T) {
 	}
 }
 
+func TestAgentManagerReplaysSameLogicalStartAdmission(t *testing.T) {
+	manager := testAgentManager(t, ProviderAdapterFunc(func(context.Context, ProviderRequest, func(ProviderEvent) error) (ProviderResult, error) {
+		return ProviderResult{Summary: "done", ResolvedModel: "fake-model", StopReason: "stop"}, nil
+	}), DefaultAgentLimits())
+	request := StartRequest{
+		SessionID: "session_a", Provider: "fake", CredentialRef: "cred_fake_default", Prompt: "same logical start",
+		MaxRequests: 1, ClientRequestID: "logical-start-001",
+	}
+	first, err := manager.StartAdmission(context.Background(), request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := manager.StartAdmission(context.Background(), request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !first.Created || first.Replayed || second.Created || !second.Replayed {
+		t.Fatalf("unexpected admission outcomes: first=%+v second=%+v", first, second)
+	}
+	if first.Record.AgentID != second.Record.AgentID {
+		t.Fatalf("duplicate admission changed agent: first=%s second=%s", first.Record.AgentID, second.Record.AgentID)
+	}
+}
+
+func TestAgentManagerRejectsChangedRequestForLogicalStartKey(t *testing.T) {
+	manager := testAgentManager(t, ProviderAdapterFunc(func(context.Context, ProviderRequest, func(ProviderEvent) error) (ProviderResult, error) {
+		return ProviderResult{Summary: "done", ResolvedModel: "fake-model", StopReason: "stop"}, nil
+	}), DefaultAgentLimits())
+	request := StartRequest{SessionID: "session_a", Provider: "fake", CredentialRef: "cred_fake_default", Prompt: "original", MaxRequests: 1, ClientRequestID: "logical-start-conflict"}
+	if _, err := manager.StartAdmission(context.Background(), request); err != nil {
+		t.Fatal(err)
+	}
+	request.Prompt = "changed"
+	if _, err := manager.StartAdmission(context.Background(), request); !errors.Is(err, ErrIdempotencyConflict) {
+		t.Fatalf("err=%v", err)
+	}
+}
+
 func TestAgentManagerDoesNotPersistResolvedSecret(t *testing.T) {
 	provider := &blockingProvider{release: make(chan struct{})}
 	manager := testAgentManager(t, provider, DefaultAgentLimits())

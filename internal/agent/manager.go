@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
@@ -28,6 +29,11 @@ type managedAgent struct {
 	finalizeErr error
 }
 
+type admissionLock struct {
+	mu   sync.Mutex
+	refs int
+}
+
 type Manager struct {
 	options     ManagerOptions
 	persistence *agentPersistence
@@ -36,6 +42,8 @@ type Manager struct {
 	rootCancel  context.CancelFunc
 
 	mu             sync.Mutex
+	admissionMu    sync.Mutex
+	admissionLocks map[string]*admissionLock
 	agents         map[string]*managedAgent
 	queue          []string
 	activeGlobal   int
@@ -99,7 +107,7 @@ func NewManager(ctx context.Context, options ManagerOptions) (*Manager, error) {
 	rootCtx, cancel := context.WithCancel(ctx)
 	manager := &Manager{
 		options: options, persistence: store, backends: backends, rootCtx: rootCtx, rootCancel: cancel,
-		agents: map[string]*managedAgent{}, activeProvider: map[string]int{}, activeSession: map[string]int{},
+		agents: map[string]*managedAgent{}, activeProvider: map[string]int{}, activeSession: map[string]int{}, admissionLocks: map[string]*admissionLock{},
 	}
 	if err := manager.recover(); err != nil {
 		cancel()
@@ -123,6 +131,67 @@ func randomAgentID() string {
 func (m *Manager) StorageRoot() string { return m.persistence.root }
 
 func (m *Manager) Start(ctx context.Context, request StartRequest) (Record, error) {
+	outcome, err := m.StartAdmission(ctx, request)
+	return outcome.Record, err
+}
+
+func (m *Manager) StartAdmission(ctx context.Context, request StartRequest) (StartOutcome, error) {
+	request.ClientRequestID = strings.TrimSpace(request.ClientRequestID)
+	if request.ClientRequestID == "" {
+		record, err := m.start(ctx, request)
+		return StartOutcome{Record: record, Created: err == nil}, err
+	}
+	release := m.acquireAdmissionKey(strings.TrimSpace(request.SessionID) + "\x00" + request.ClientRequestID)
+	defer release()
+	fingerprint := fingerprintStartRequest(request)
+	m.mu.Lock()
+	for _, existing := range m.agents {
+		if existing.record.SessionID == strings.TrimSpace(request.SessionID) && existing.record.ClientRequestID == request.ClientRequestID {
+			if existing.record.RequestFingerprint != fingerprint {
+				m.mu.Unlock()
+				return StartOutcome{}, ErrIdempotencyConflict
+			}
+			record := cloneAgentRecord(existing.record)
+			m.mu.Unlock()
+			return StartOutcome{Record: record, Replayed: true}, nil
+		}
+	}
+	m.mu.Unlock()
+	record, err := m.start(ctx, request)
+	if err != nil {
+		return StartOutcome{}, err
+	}
+	return StartOutcome{Record: record, Created: true}, nil
+}
+
+func (m *Manager) acquireAdmissionKey(key string) func() {
+	m.admissionMu.Lock()
+	item := m.admissionLocks[key]
+	if item == nil {
+		item = &admissionLock{}
+		m.admissionLocks[key] = item
+	}
+	item.refs++
+	m.admissionMu.Unlock()
+	item.mu.Lock()
+	return func() {
+		item.mu.Unlock()
+		m.admissionMu.Lock()
+		item.refs--
+		if item.refs == 0 {
+			delete(m.admissionLocks, key)
+		}
+		m.admissionMu.Unlock()
+	}
+}
+
+func fingerprintStartRequest(request StartRequest) string {
+	value := fmt.Sprintf("%s\x00%s\x00%s\x00%s\x00%s\x00%s\x00%s\x00%d\x00%d", strings.TrimSpace(request.SessionID), strings.ToLower(strings.TrimSpace(request.Provider)), strings.TrimSpace(request.Model), strings.TrimSpace(request.Role), strings.TrimSpace(request.CredentialRef), request.Prompt, strings.TrimSpace(request.PermissionMode), request.MaxRequests, request.Timeout.Milliseconds())
+	return fmt.Sprintf("%x", sha256.Sum256([]byte(value)))
+}
+
+func (m *Manager) start(ctx context.Context, request StartRequest) (Record, error) {
+	requestFingerprint := fingerprintStartRequest(request)
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -201,6 +270,7 @@ func (m *Manager) Start(ctx context.Context, request StartRequest) (Record, erro
 	now := m.options.Now().UTC()
 	record := Record{
 		AgentID: id, SessionID: request.SessionID, Workspace: binding.Workspace, RuntimeScope: binding.RuntimeScope,
+		ClientRequestID: request.ClientRequestID, RequestFingerprint: requestFingerprint,
 		PermissionMode: permission, Provider: request.Provider, Backend: backendIdentity, Model: request.Model, ResolvedModel: request.Model,
 		Role: request.Role, CredentialRef: request.CredentialRef, TimeoutMS: request.Timeout.Milliseconds(),
 		Budget: AgentBudget{MaxRequests: request.MaxRequests}, MaxRequests: request.MaxRequests,

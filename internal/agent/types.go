@@ -91,15 +91,22 @@ type ManagerOptions struct {
 }
 
 type StartRequest struct {
-	SessionID      string
-	Provider       string
-	Model          string
-	CredentialRef  string
-	Role           string
-	Prompt         string
-	PermissionMode string
-	MaxRequests    int
-	Timeout        time.Duration
+	SessionID       string
+	ClientRequestID string
+	Provider        string
+	Model           string
+	CredentialRef   string
+	Role            string
+	Prompt          string
+	PermissionMode  string
+	MaxRequests     int
+	Timeout         time.Duration
+}
+
+type StartOutcome struct {
+	Record   Record
+	Created  bool
+	Replayed bool
 }
 
 type AgentBudget struct {
@@ -121,32 +128,34 @@ type ErrorEnvelope struct {
 }
 
 type Record struct {
-	AgentID        string          `json:"agent_id"`
-	SessionID      string          `json:"session_id"`
-	Workspace      string          `json:"workspace"`
-	RuntimeScope   string          `json:"runtime_scope"`
-	PermissionMode string          `json:"permission_mode"`
-	Provider       string          `json:"provider"`
-	Backend        BackendIdentity `json:"backend,omitempty"`
-	Model          string          `json:"model"`
-	ResolvedModel  string          `json:"resolved_model,omitempty"`
-	Role           string          `json:"role"`
-	CredentialRef  string          `json:"credential_ref"`
-	TimeoutMS      int64           `json:"timeout_ms"`
-	Budget         AgentBudget     `json:"budget"`
-	Usage          AgentUsage      `json:"usage"`
-	MaxRequests    int             `json:"max_requests"`
-	RequestsUsed   int             `json:"requests_used"`
-	State          AgentState      `json:"state"`
-	CreatedAt      time.Time       `json:"created_at"`
-	StartedAt      *time.Time      `json:"started_at,omitempty"`
-	FinishedAt     *time.Time      `json:"finished_at,omitempty"`
-	UpdatedAt      time.Time       `json:"updated_at"`
-	OutputCursor   int64           `json:"output_cursor"`
-	ResultSummary  string          `json:"result_summary,omitempty"`
-	Error          string          `json:"error,omitempty"`
-	FailureReason  *ErrorEnvelope  `json:"failure_reason,omitempty"`
-	StopReason     string          `json:"stop_reason,omitempty"`
+	AgentID            string          `json:"agent_id"`
+	SessionID          string          `json:"session_id"`
+	ClientRequestID    string          `json:"client_request_id,omitempty"`
+	RequestFingerprint string          `json:"request_fingerprint,omitempty"`
+	Workspace          string          `json:"workspace"`
+	RuntimeScope       string          `json:"runtime_scope"`
+	PermissionMode     string          `json:"permission_mode"`
+	Provider           string          `json:"provider"`
+	Backend            BackendIdentity `json:"backend,omitempty"`
+	Model              string          `json:"model"`
+	ResolvedModel      string          `json:"resolved_model,omitempty"`
+	Role               string          `json:"role"`
+	CredentialRef      string          `json:"credential_ref"`
+	TimeoutMS          int64           `json:"timeout_ms"`
+	Budget             AgentBudget     `json:"budget"`
+	Usage              AgentUsage      `json:"usage"`
+	MaxRequests        int             `json:"max_requests"`
+	RequestsUsed       int             `json:"requests_used"`
+	State              AgentState      `json:"state"`
+	CreatedAt          time.Time       `json:"created_at"`
+	StartedAt          *time.Time      `json:"started_at,omitempty"`
+	FinishedAt         *time.Time      `json:"finished_at,omitempty"`
+	UpdatedAt          time.Time       `json:"updated_at"`
+	OutputCursor       int64           `json:"output_cursor"`
+	ResultSummary      string          `json:"result_summary,omitempty"`
+	Error              string          `json:"error,omitempty"`
+	FailureReason      *ErrorEnvelope  `json:"failure_reason,omitempty"`
+	StopReason         string          `json:"stop_reason,omitempty"`
 }
 
 type AgentResource struct {

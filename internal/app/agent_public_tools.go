@@ -38,25 +38,27 @@ func (r *Runtime) d2AgentStart(ctx context.Context, args map[string]any) (Result
 		model, _ = raw.(string)
 	}
 	budget, _ := args["budget"].(map[string]any)
-	record, err := r.agents.Start(ctx, agentruntime.StartRequest{
-		SessionID:      sessionID,
-		Provider:       provider,
-		Model:          strings.TrimSpace(model),
-		Role:           strings.TrimSpace(toolcore.StringArg(args, "role", "")),
-		CredentialRef:  credentialRef,
-		Prompt:         toolcore.StringArg(args, "prompt", ""),
-		PermissionMode: permission,
-		MaxRequests:    toolcore.IntArg(budget, "max_requests", 0),
-		Timeout:        time.Duration(toolcore.IntArg(args, "timeout_ms", 0)) * time.Millisecond,
+	outcome, err := r.agents.StartAdmission(ctx, agentruntime.StartRequest{
+		SessionID:       sessionID,
+		ClientRequestID: strings.TrimSpace(toolcore.StringArg(args, "client_request_id", "")),
+		Provider:        provider,
+		Model:           strings.TrimSpace(model),
+		Role:            strings.TrimSpace(toolcore.StringArg(args, "role", "")),
+		CredentialRef:   credentialRef,
+		Prompt:          toolcore.StringArg(args, "prompt", ""),
+		PermissionMode:  permission,
+		MaxRequests:     toolcore.IntArg(budget, "max_requests", 0),
+		Timeout:         time.Duration(toolcore.IntArg(args, "timeout_ms", 0)) * time.Millisecond,
 	})
 	if err != nil {
 		return nil, agentToolError(err)
 	}
+	record := outcome.Record
 	resource, err := agentPublicResourceMap(record)
 	if err != nil {
 		return nil, agentToolError(err)
 	}
-	return Result{"ok": true, "agent": resource}, nil
+	return Result{"ok": true, "agent": resource, "created": outcome.Created, "replayed": outcome.Replayed}, nil
 }
 
 func (r *Runtime) d2AgentStatus(ctx context.Context, args map[string]any) (Result, error) {
