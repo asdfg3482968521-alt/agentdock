@@ -439,3 +439,10 @@ func TestValidateAuthTreatsEmptyHostAsWildcard(t *testing.T) {
 		t.Fatalf("ValidateAuth() error = %v, want wildcard authentication error", err)
 	}
 }
+
+func TestEnsurePrivatePathCanBeExplicitlySkipped(t *testing.T) {
+	t.Setenv("AGENTDOCK_SKIP_PRIVATE_PATH_ACL", "1")
+	if err := ensurePrivatePath(filepath.Join(t.TempDir(), "not-created")); err != nil {
+		t.Fatalf("ensurePrivatePath() error = %v, want skip to avoid filesystem access", err)
+	}
+}

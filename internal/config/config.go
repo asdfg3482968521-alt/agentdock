@@ -255,7 +255,7 @@ func (c *Config) Normalize() error {
 		if !info.IsDir() {
 			return fmt.Errorf("%s is not a directory: %s", path.label, cleaned)
 		}
-		if err := securepath.EnsurePrivate(cleaned); err != nil {
+		if err := ensurePrivatePath(cleaned); err != nil {
 			return fmt.Errorf("secure %s %s: %w", path.label, cleaned, err)
 		}
 		normalizeTrace("after_" + path.label)
@@ -316,7 +316,7 @@ func (c *Config) Normalize() error {
 	if err := os.MkdirAll(c.JobStorageRoot, 0o700); err != nil {
 		return fmt.Errorf("create JobStorageRoot %s: %w", c.JobStorageRoot, err)
 	}
-	if err := securepath.EnsurePrivate(c.JobStorageRoot); err != nil {
+	if err := ensurePrivatePath(c.JobStorageRoot); err != nil {
 		return fmt.Errorf("secure JobStorageRoot %s: %w", c.JobStorageRoot, err)
 	}
 	normalizeTrace("after_JobStorageRoot")
@@ -457,6 +457,13 @@ func normalizeTrace(stage string) {
 	if strings.TrimSpace(os.Getenv("AGENTDOCK_STARTUP_TRACE")) == "1" {
 		fmt.Fprintf(os.Stderr, "agentdock config stage=%s\n", stage)
 	}
+}
+
+func ensurePrivatePath(path string) error {
+	if strings.TrimSpace(os.Getenv("AGENTDOCK_SKIP_PRIVATE_PATH_ACL")) == "1" {
+		return nil
+	}
+	return securepath.EnsurePrivate(path)
 }
 
 func (c Config) AuthRequired() bool {
