@@ -49,7 +49,6 @@ type StartupIssue struct {
 	Error     string `json:"error"`
 }
 
-
 type Runtime struct {
 	cfg              config.Config
 	ws               *workspace.Workspace
