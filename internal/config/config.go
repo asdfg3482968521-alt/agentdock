@@ -240,6 +240,7 @@ func (c *Config) Normalize() error {
 		{label: "OpenCodeProjectRoot", value: &c.OpenCodeProjectRoot},
 	}
 	for _, path := range paths {
+		normalizeTrace("before_" + path.label)
 		cleaned := filepath.Clean(strings.TrimSpace(*path.value))
 		if !filepath.IsAbs(cleaned) {
 			return fmt.Errorf("%s must resolve to an absolute path: %s", path.label, cleaned)
@@ -257,6 +258,7 @@ func (c *Config) Normalize() error {
 		if err := securepath.EnsurePrivate(cleaned); err != nil {
 			return fmt.Errorf("secure %s %s: %w", path.label, cleaned, err)
 		}
+		normalizeTrace("after_" + path.label)
 		*path.value = cleaned
 	}
 	c.OpenCodeRuntimeManifest = strings.TrimSpace(c.OpenCodeRuntimeManifest)
@@ -310,12 +312,14 @@ func (c *Config) Normalize() error {
 			return fmt.Errorf("JobStorageRoot must resolve to an absolute path: %s", c.JobStorageRoot)
 		}
 	}
+	normalizeTrace("before_JobStorageRoot")
 	if err := os.MkdirAll(c.JobStorageRoot, 0o700); err != nil {
 		return fmt.Errorf("create JobStorageRoot %s: %w", c.JobStorageRoot, err)
 	}
 	if err := securepath.EnsurePrivate(c.JobStorageRoot); err != nil {
 		return fmt.Errorf("secure JobStorageRoot %s: %w", c.JobStorageRoot, err)
 	}
+	normalizeTrace("after_JobStorageRoot")
 	for _, limit := range []struct {
 		name  string
 		value int
@@ -447,6 +451,12 @@ func (c *Config) Normalize() error {
 	}
 	c.TrustedProxyCIDRs = networks
 	return nil
+}
+
+func normalizeTrace(stage string) {
+	if strings.TrimSpace(os.Getenv("AGENTDOCK_STARTUP_TRACE")) == "1" {
+		fmt.Fprintf(os.Stderr, "agentdock config stage=%s\n", stage)
+	}
 }
 
 func (c Config) AuthRequired() bool {
