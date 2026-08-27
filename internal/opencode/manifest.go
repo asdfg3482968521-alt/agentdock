@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 )
@@ -46,26 +45,28 @@ func (l ManifestLocator) Locate(ctx context.Context) (RuntimeLocation, error) {
 	manifest.Cwd = filepath.Clean(strings.TrimSpace(manifest.Cwd))
 	manifest.SourceRoot = filepath.Clean(strings.TrimSpace(manifest.SourceRoot))
 	manifest.ProtocolVersion = strings.TrimSpace(manifest.ProtocolVersion)
-	if manifest.RuntimeVersion == "" || manifest.VerifiedSHA == "" || manifest.Executable == "." || manifest.Cwd == "." || manifest.SourceRoot == "." {
-		return RuntimeLocation{}, newError("OPENCODE_MANIFEST_INVALID", "runtimeVersion, verifiedSha, executable, cwd, and sourceRoot are required", false, map[string]any{"path": path}, nil)
+	if manifest.RuntimeVersion == "" || manifest.VerifiedSHA == "" || manifest.Executable == "." || manifest.Cwd == "." {
+		return RuntimeLocation{}, newError("OPENCODE_MANIFEST_INVALID", "runtimeVersion, verifiedSha, executable, and cwd are required", false, map[string]any{"path": path}, nil)
 	}
-	for label, value := range map[string]string{"executable": manifest.Executable, "cwd": manifest.Cwd, "sourceRoot": manifest.SourceRoot} {
+	for label, value := range map[string]string{"executable": manifest.Executable, "cwd": manifest.Cwd} {
 		if !filepath.IsAbs(value) {
 			return RuntimeLocation{}, newError("OPENCODE_MANIFEST_INVALID", fmt.Sprintf("%s must be absolute", label), false, map[string]any{"path": path, label: value}, nil)
 		}
 	}
+	// sourceRoot is retained only as optional provenance metadata. A production
+	// runtime must not depend on a source checkout remaining on disk.
+	if manifest.SourceRoot != "." && manifest.SourceRoot != "" && !filepath.IsAbs(manifest.SourceRoot) {
+		return RuntimeLocation{}, newError("OPENCODE_MANIFEST_INVALID", "sourceRoot must be absolute when provided", false, map[string]any{"path": path, "sourceRoot": manifest.SourceRoot}, nil)
+	}
 	if info, err := os.Stat(manifest.Executable); err != nil || info.IsDir() {
 		return RuntimeLocation{}, newError("OPENCODE_RUNTIME_NOT_FOUND", "OpenCode runtime executable is unavailable", false, map[string]any{"executable": manifest.Executable}, err)
 	}
-	for label, value := range map[string]string{"cwd": manifest.Cwd, "sourceRoot": manifest.SourceRoot} {
-		info, err := os.Stat(value)
-		if err != nil || !info.IsDir() {
-			return RuntimeLocation{}, newError("OPENCODE_RUNTIME_NOT_FOUND", fmt.Sprintf("OpenCode runtime %s is unavailable", label), false, map[string]any{label: value}, err)
-		}
+	if info, err := os.Stat(manifest.Cwd); err != nil || !info.IsDir() {
+		return RuntimeLocation{}, newError("OPENCODE_RUNTIME_NOT_FOUND", "OpenCode runtime cwd is unavailable", false, map[string]any{"cwd": manifest.Cwd}, err)
 	}
-	actualSHA, err := gitHead(ctx, manifest.SourceRoot)
-	if err != nil {
-		return RuntimeLocation{}, newError("OPENCODE_RUNTIME_VERIFY_FAILED", "read OpenCode runtime Git HEAD", false, map[string]any{"source_root": manifest.SourceRoot}, err)
+	// verifiedSha remains the frozen runtime identity recorded by the manifest.
+	// Do not re-open or validate the development source repository at startup.
+	return RuntimeLocation{}, newError("OPENCODE_RUNTIME_VERIFY_FAILED", "read OpenCode runtime Git HEAD", false, map[string]any{"source_root": manifest.SourceRoot}, err)
 	}
 	if !strings.EqualFold(actualSHA, manifest.VerifiedSHA) {
 		return RuntimeLocation{}, newError(
@@ -81,17 +82,4 @@ func (l ManifestLocator) Locate(ctx context.Context) (RuntimeLocation, error) {
 		Executable: manifest.Executable, Args: append([]string(nil), manifest.Args...), Cwd: manifest.Cwd,
 		SourceRoot: manifest.SourceRoot, ProtocolVersion: manifest.ProtocolVersion,
 	}, nil
-}
-
-func gitHead(ctx context.Context, root string) (string, error) {
-	cmd := exec.CommandContext(ctx, "git", "-C", root, "rev-parse", "HEAD")
-	output, err := cmd.Output()
-	if err != nil {
-		return "", err
-	}
-	sha := strings.ToLower(strings.TrimSpace(string(output)))
-	if len(sha) != 40 {
-		return "", fmt.Errorf("unexpected Git HEAD %q", sha)
-	}
-	return sha, nil
 }
