@@ -166,6 +166,7 @@ func TestAgentManagerReplaysSameLogicalStartAdmission(t *testing.T) {
 	manager := testAgentManager(t, ProviderAdapterFunc(func(context.Context, ProviderRequest, func(ProviderEvent) error) (ProviderResult, error) {
 		return ProviderResult{Summary: "done", ResolvedModel: "fake-model", StopReason: "stop"}, nil
 	}), DefaultAgentLimits())
+	defer manager.Close()
 	request := StartRequest{
 		SessionID: "session_a", Provider: "fake", CredentialRef: "cred_fake_default", Prompt: "same logical start",
 		MaxRequests: 1, ClientRequestID: "logical-start-001",
