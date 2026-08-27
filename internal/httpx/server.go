@@ -71,6 +71,7 @@ func Serve(ctx context.Context, server *mcp.Server, cfg config.Config) error {
 	registerOAuthRoutes(mux, cfg, oauthStore)
 	mux.HandleFunc("/context", agentDockContextHandler(server, cfg, oauthStore))
 	registerRuntimeAPI(mux, server, cfg, oauthStore)
+	registerGPTActionsRoutes(mux, server, cfg, oauthStore)
 	mux.HandleFunc("/mcp", mcpEndpointHandler(server, cfg, oauthStore))
 
 	addr := fmt.Sprintf("%s:%d", cfg.Host, cfg.Port)
