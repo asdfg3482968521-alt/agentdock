@@ -24,6 +24,9 @@ func (r *Runtime) RuntimeStatus() Result {
 		"browser_enabled":       r.cfg.BrowserEnabled,
 		"memory_enabled":        r.cfg.NexusEndpoint != "",
 		"nexus_enabled":         strings.TrimSpace(r.cfg.NexusEndpoint) != "",
+		"degraded_startup":      len(r.startupIssues) > 0,
+		"startup_issues":        r.startupIssueList(),
+		"subsystems":            r.subsystemStatus(),
 		"tool_count":            len(tools),
 		"tools":                 tools,
 	}
