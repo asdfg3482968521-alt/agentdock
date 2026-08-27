@@ -202,6 +202,73 @@ func TestAgentManagerRejectsChangedRequestForLogicalStartKey(t *testing.T) {
 	}
 }
 
+func TestAgentManagerLogicalStartContractAcrossConcurrencyRestartFailureScopeAndLegacy(t *testing.T) {
+	provider := &blockingProvider{started: make(chan string, 8), release: make(chan struct{})}
+	manager := testAgentManager(t, provider, DefaultAgentLimits())
+	defer manager.Close()
+	request := StartRequest{SessionID: "session_a", Provider: "fake", CredentialRef: "cred_fake_default", Prompt: "pending", MaxRequests: 1, ClientRequestID: "contract-key"}
+	results := make(chan StartOutcome, 2)
+	errs := make(chan error, 2)
+	for range 2 {
+		go func() {
+			outcome, err := manager.StartAdmission(context.Background(), request)
+			results <- outcome
+			errs <- err
+		}()
+	}
+	var first, second StartOutcome
+	for i := 0; i < 2; i++ {
+		outcome, err := <-results, <-errs
+		if err != nil {
+			t.Fatal(err)
+		}
+		if i == 0 {
+			first = outcome
+		} else {
+			second = outcome
+		}
+	}
+	if first.Record.AgentID != second.Record.AgentID || (first.Created == second.Created) || (first.Replayed == second.Replayed) {
+		t.Fatalf("concurrent/pending outcomes first=%+v second=%+v", first, second)
+	}
+	select {
+	case <-provider.started:
+	case <-time.After(2 * time.Second):
+		t.Fatal("logical start did not begin")
+	}
+	select {
+	case <-provider.started:
+		t.Fatal("duplicate started a second execution")
+	default:
+	}
+	other := request
+	other.SessionID, other.PermissionMode = "session_b", "read-only"
+	if outcome, err := manager.StartAdmission(context.Background(), other); err != nil || !outcome.Created || outcome.Record.AgentID == first.Record.AgentID {
+		t.Fatalf("scope isolation outcome=%+v err=%v", outcome, err)
+	}
+	close(provider.release)
+	if _, err := manager.Wait(context.Background(), first.Record.AgentID); err != nil {
+		t.Fatal(err)
+	}
+	restarted, err := NewManager(context.Background(), manager.options)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer restarted.Close()
+	replay, err := restarted.StartAdmission(context.Background(), request)
+	if err != nil || !replay.Replayed || replay.Record.AgentID != first.Record.AgentID {
+		t.Fatalf("restart replay=%+v err=%v", replay, err)
+	}
+	legacyA, err := restarted.StartAdmission(context.Background(), StartRequest{SessionID: "session_a", Provider: "fake", CredentialRef: "cred_fake_default", Prompt: "legacy", MaxRequests: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	legacyB, err := restarted.StartAdmission(context.Background(), StartRequest{SessionID: "session_a", Provider: "fake", CredentialRef: "cred_fake_default", Prompt: "legacy", MaxRequests: 1})
+	if err != nil || legacyA.Record.AgentID == legacyB.Record.AgentID || !legacyA.Created || !legacyB.Created {
+		t.Fatalf("legacy outcomes a=%+v b=%+v err=%v", legacyA, legacyB, err)
+	}
+}
+
 func TestAgentManagerDoesNotPersistResolvedSecret(t *testing.T) {
 	provider := &blockingProvider{release: make(chan struct{})}
 	manager := testAgentManager(t, provider, DefaultAgentLimits())
