@@ -161,6 +161,7 @@ func printVersion(output io.Writer) {
 }
 
 func runServer(ctx context.Context, args []string, stderr io.Writer) error {
+	startupTrace(stderr, "config_from_env")
 	cfg, err := config.FromEnv()
 	if err != nil {
 		return err
@@ -198,13 +199,17 @@ func runServer(ctx context.Context, args []string, stderr io.Writer) error {
 	if flags.NArg() != 0 {
 		return fmt.Errorf("未知命令或参数：%s", flags.Arg(0))
 	}
+	startupTrace(stderr, "config_normalize")
 	if err := cfg.Normalize(); err != nil {
 		return err
 	}
+	startupTrace(stderr, "config_validate_auth")
 	if err := cfg.ValidateAuth(); err != nil {
 		return err
 	}
+	startupTrace(stderr, "logging")
 	logx.Setup(cfg.LogLevel)
+	startupTrace(stderr, "desktop_repair")
 	if desktopRuntimeRepairEnabled() {
 		if err := selfupdate.RepairDesktopRuntimeIfNeeded(ctx, stderr); err != nil {
 			// Windows v0.7.4 及更早版本只会替换 core。新版 core 启动时尝试补齐同版本控制面板，
@@ -250,6 +255,12 @@ func runServer(ctx context.Context, args []string, stderr io.Writer) error {
 
 func desktopRuntimeRepairEnabled() bool {
 	return strings.TrimSpace(os.Getenv("AGENTDOCK_SKIP_DESKTOP_RUNTIME_REPAIR")) != "1"
+}
+
+func startupTrace(output io.Writer, stage string) {
+	if strings.TrimSpace(os.Getenv("AGENTDOCK_STARTUP_TRACE")) == "1" {
+		fmt.Fprintf(output, "agentdock startup stage=%s\n", stage)
+	}
 }
 
 func serveStdio(ctx context.Context, server *mcp.Server) error {

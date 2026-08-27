@@ -84,3 +84,17 @@ func TestDesktopRuntimeRepairEnabled(t *testing.T) {
 		t.Fatal("desktop runtime repair should be enabled by default")
 	}
 }
+
+func TestStartupTrace(t *testing.T) {
+	var output bytes.Buffer
+	t.Setenv("AGENTDOCK_STARTUP_TRACE", "")
+	startupTrace(&output, "disabled")
+	if output.Len() != 0 {
+		t.Fatalf("unexpected disabled trace: %q", output.String())
+	}
+	t.Setenv("AGENTDOCK_STARTUP_TRACE", "1")
+	startupTrace(&output, "enabled")
+	if output.String() != "agentdock startup stage=enabled\n" {
+		t.Fatalf("unexpected trace: %q", output.String())
+	}
+}
