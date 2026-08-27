@@ -4,16 +4,18 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"maps"
 	"os"
 	"path/filepath"
 	"reflect"
 	"sort"
+	"strings"
 	"testing"
 )
 
 func TestD2AgentRegistryMatchesFrozenBFinalSchemasAnd24TargetTools(t *testing.T) {
 	expectedHashes := map[string]string{
-		"agent_start":  "c9f2d0d50c64f58a2f94c0564ef523e4c99e83057c8a0bc3471cff480e9ae44e",
+		"agent_start":  "22eec042f0a39b86134f1c079f98f159cfe5c3fd321ad40601229c63752ca901",
 		"agent_status": "0febbbdfc606600ab43e7045deb80a241cdce31c592eb019c3937019a04db036",
 		"agent_output": "4abbc2a16553acc1c0fbc8ce9bc6524b8983d77889942bce869bdc2cac4a5bda",
 		"agent_cancel": "cf9b7ad9e0c8c06a598d74bd62fe22c21e3477047f69c4f96331be60bd113937",
@@ -108,5 +110,31 @@ func TestC25OpenCodeProviderFitsFrozenAgentStartSchema(t *testing.T) {
 	}
 	if err := validateFrozenAgentInput("agent_start", args); err != nil {
 		t.Fatalf("frozen agent_start must accept provider=opencode without a schema change: %v", err)
+	}
+}
+
+func TestD3AgentStartSchemaExposesOptionalLogicalStartIdempotencyKey(t *testing.T) {
+	valid := map[string]any{
+		"session_id": "session_d3_idempotency", "provider": "opencode-native", "model": nil,
+		"role": "implementation", "credential_ref": "cred_opencode_local", "prompt": "inspect repository",
+		"permission": "project", "timeout_ms": 30000, "budget": map[string]any{"max_requests": 1},
+		"client_request_id": "logical-start-001",
+	}
+	if err := validateFrozenAgentInput("agent_start", valid); err != nil {
+		t.Fatalf("keyed agent_start rejected: %v", err)
+	}
+	for _, key := range []string{"", strings.Repeat("x", 257)} {
+		invalid := maps.Clone(valid)
+		invalid["client_request_id"] = key
+		if err := validateFrozenAgentInput("agent_start", invalid); err == nil {
+			t.Fatalf("client_request_id %q unexpectedly accepted", key)
+		}
+	}
+	output := frozenAgentOutputSchema("agent_start")
+	properties := output["properties"].(map[string]any)
+	for _, field := range []string{"created", "replayed"} {
+		if _, ok := properties[field]; !ok {
+			t.Fatalf("agent_start output does not expose %s", field)
+		}
 	}
 }

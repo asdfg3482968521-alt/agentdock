@@ -276,6 +276,7 @@ func TestAgentErrorEnvelopeMapsFrozenCodesAndRedactsSecrets(t *testing.T) {
 		{"tool", ErrToolError, "TOOL_ERROR"},
 		{"budget", ErrBudgetExceeded, "BUDGET_EXCEEDED"},
 		{"resource", ErrResourceLimit, "RESOURCE_LIMIT"},
+		{"idempotency_conflict", ErrIdempotencyConflict, "IDEMPOTENCY_CONFLICT"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

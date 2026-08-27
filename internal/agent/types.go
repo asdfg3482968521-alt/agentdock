@@ -43,6 +43,7 @@ var (
 	ErrModelUnavailable              = errors.New("model unavailable")
 	ErrBudgetExceeded                = errors.New("budget exceeded")
 	ErrResourceLimit                 = errors.New("resource limit")
+	ErrIdempotencyConflict           = errors.New("logical start idempotency conflict")
 	ErrToolError                     = errors.New("tool error")
 )
 

@@ -61,6 +61,8 @@ func AgentErrorFrom(err error, secret []byte) ErrorEnvelope {
 		code = "BUDGET_EXCEEDED"
 	case errors.Is(err, ErrResourceLimit):
 		code, retryable = "RESOURCE_LIMIT", true
+	case errors.Is(err, ErrIdempotencyConflict):
+		code = "IDEMPOTENCY_CONFLICT"
 	case errors.Is(err, context.DeadlineExceeded):
 		code, retryable = "TIMEOUT", true
 	case errors.Is(err, context.Canceled):
