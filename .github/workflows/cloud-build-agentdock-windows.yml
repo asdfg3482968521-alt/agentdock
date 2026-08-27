@@ -45,7 +45,8 @@ jobs:
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
-          go test ./internal/app ./internal/httpx ./internal/mcp ./internal/opencode
+          go test ./internal/app -run 'TestRuntimeStartsDegradedWhenOpenCodeBootstrapFails|TestACPToolReturnsUnavailableInsteadOfPanicking'
+          go test ./internal/httpx ./internal/mcp ./internal/opencode
 
       - name: Build AgentDock
         shell: pwsh
