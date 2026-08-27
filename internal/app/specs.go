@@ -165,12 +165,21 @@ func allToolSpecs() []ToolSpec {
 		{Name: "agent_supervisor_correct", Title: "Correct D3 native subagent", Description: "Submit one durable idempotent graceful or force correction to the exact existing OpenCode root. Force aborts the current turn before same-root dispatch; neither mode creates a replacement root or broadens permissions.", Annotations: mutatingToolAnnotations(true, true), Availability: requiresOpenCodeNative, Handler: ctxToolHandler((*Runtime).d3SupervisorCorrect)},
 		{Name: "evolve", Title: "Evolve AgentDock knowledge", Description: "Propose reusable knowledge, pre-bind Task learning checks, supersede, or retract. Bind must happen before execution and declares on_success/on_failure semantics; AgentDock resolves later Task outcomes and owns lifecycle policy while Recall only persists the result.", Availability: requiresNexus, Handler: ctxToolHandler((*Runtime).evolve)},
 		{Name: "acp_session", Title: "Manage ACP sessions", Description: "Inspect or authenticate the configured ACP agent and create, load, resume, fork, configure, list, inspect, close, or delete persistent ACP sessions through one action-based entrypoint. Session workspaces may use any host-accessible directory and optional methods are capability-gated.", Annotations: mutatingToolAnnotations(true, true), Availability: requiresACP, Handler: func(ctx context.Context, r *Runtime, args map[string]any) (Result, error) {
+			if r == nil || r.acp == nil {
+				return nil, toolError("ACP_RUNTIME_UNAVAILABLE", "ACP runtime is unavailable; inspect server_info startup_issues", "acp")
+			}
 			return r.acp.Session(ctx, args)
 		}},
 		{Name: "acp_prompt", Title: "Run ACP prompts", Description: "Start asynchronous ACP prompt turns, poll ordered session events, steer a running turn, or cancel a turn. start returns immediately with a run_id; use action=events for bounded long-poll observation.", Annotations: mutatingToolAnnotations(true, true), Availability: requiresACP, Handler: func(ctx context.Context, r *Runtime, args map[string]any) (Result, error) {
+			if r == nil || r.acp == nil {
+				return nil, toolError("ACP_RUNTIME_UNAVAILABLE", "ACP runtime is unavailable; inspect server_info startup_issues", "acp")
+			}
 			return r.acp.Prompt(ctx, args)
 		}},
 		{Name: "acp_interaction", Title: "Handle ACP interactions", Description: "List, inspect, respond to, or cancel pending ACP permission interactions. Only options offered by the agent and permitted by the local AgentDock policy may be selected.", Annotations: mutatingToolAnnotations(true, true), Availability: requiresACP, Handler: func(ctx context.Context, r *Runtime, args map[string]any) (Result, error) {
+			if r == nil || r.acp == nil {
+				return nil, toolError("ACP_RUNTIME_UNAVAILABLE", "ACP runtime is unavailable; inspect server_info startup_issues", "acp")
+			}
 			return r.acp.Interaction(ctx, args)
 		}},
 		{Name: "workflow_template_manage", Title: "Manage workflow templates", Description: "List, get, get multiple, save, validate, publish, retire, or match AgentDock workflow templates. get_many requires the model to compose the returned templates before task creation.", Availability: requiresNexus, Handler: ctxToolHandler((*Runtime).workflowTemplateManage)},
