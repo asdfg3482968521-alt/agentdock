@@ -260,6 +260,15 @@ jobs:
           & .\scripts\test\test-windows-current-binary-as-standard-user.ps1 `
             -BinaryPath .\dist\agentdock.exe
 
+      - name: Upload Windows package artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: agentdock-windows-amd64-${{ github.run_number }}
+          path: |
+            ${{ env.AMD64_ARCHIVE }}
+            ${{ env.AMD64_CHECKSUM }}
+            ${{ runner.temp }}/agentdock-setup/AgentDockSetup-amd64.exe
+          retention-days: 14
 
       - name: Build and publish signed Windows test package
         if: ${{ inputs.test_tag != '' }}
