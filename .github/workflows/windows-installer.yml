@@ -50,10 +50,12 @@ jobs:
 
       - name: Download and validate exact installer bytes
         shell: powershell
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           $ErrorActionPreference = 'Stop'
           $downloadedInstaller = Join-Path $env:RUNNER_TEMP 'install-downloaded.ps1'
-          $installerUrl = 'https://raw.githubusercontent.com/${{ github.repository }}/${{ github.sha }}/scripts/install/install.ps1'
+          $installerUrl = 'https://api.github.com/repos/${{ github.repository }}/contents/scripts/install/install.ps1?ref=${{ github.sha }}'
           & .\scripts\test\test-install-windows-download.ps1 `
             -Url $installerUrl `
             -ExpectedInstallerPath .\scripts\install\install.ps1 `
