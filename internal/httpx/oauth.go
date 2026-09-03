@@ -118,7 +118,12 @@ func handleRegister(w http.ResponseWriter, r *http.Request, cfg config.Config, s
 		writeJSONStatus(w, http.StatusBadRequest, map[string]any{"error": errorCode, "error_description": description})
 		return
 	}
-	clientID, err := store.RegisterClient(metadata.ClientName, metadata.RedirectURIs, metadata.GrantTypes)
+	clientID, clientSecret, err := store.RegisterClientWithAuth(
+		metadata.ClientName,
+		metadata.RedirectURIs,
+		metadata.GrantTypes,
+		metadata.TokenEndpointAuthMethod,
+	)
 	if err != nil {
 		writeJSONStatus(w, http.StatusInternalServerError, map[string]any{"error": "server_error"})
 		return
@@ -127,9 +132,13 @@ func handleRegister(w http.ResponseWriter, r *http.Request, cfg config.Config, s
 		"client_id":                  clientID,
 		"client_id_issued_at":        time.Now().Unix(),
 		"redirect_uris":              metadata.RedirectURIs,
-		"token_endpoint_auth_method": "none",
+		"token_endpoint_auth_method": metadata.TokenEndpointAuthMethod,
 		"grant_types":                metadata.GrantTypes,
 		"response_types":             metadata.ResponseTypes,
+	}
+	if clientSecret != "" {
+		response["client_secret"] = clientSecret
+		response["client_secret_expires_at"] = 0
 	}
 	if metadata.ClientName != "" {
 		response["client_name"] = metadata.ClientName
@@ -154,7 +163,8 @@ func decodeClientRegistration(w http.ResponseWriter, r *http.Request) (clientReg
 		return metadata, errors.New("client_name exceeds 200 characters")
 	}
 	method := strings.TrimSpace(metadata.TokenEndpointAuthMethod)
-	if method != "none" {
+	if method != auth.OAuthTokenEndpointAuthNone &&
+		method != auth.OAuthTokenEndpointAuthClientSecretPost {
 		return metadata, fmt.Errorf("token_endpoint_auth_method %q is not supported", method)
 	}
 	if len(metadata.RedirectURIs) == 0 || len(metadata.RedirectURIs) > 10 {
@@ -195,7 +205,7 @@ func decodeClientRegistration(w http.ResponseWriter, r *http.Request) (clientReg
 		return metadata, err
 	}
 	metadata.RedirectURIs = redirectURIs
-	metadata.TokenEndpointAuthMethod = "none"
+	metadata.TokenEndpointAuthMethod = method
 	metadata.GrantTypes = grantTypes
 	metadata.ResponseTypes = responseTypes
 	return metadata, nil
@@ -289,15 +299,18 @@ func setBearerChallenge(w http.ResponseWriter, cfg config.Config, r *http.Reques
 func oauthMetadata(cfg config.Config, r *http.Request) map[string]any {
 	issuer := issuerFor(cfg, r)
 	return map[string]any{
-		"issuer":                                issuer,
-		"authorization_endpoint":                issuer + "/oauth/authorize",
-		"token_endpoint":                        issuer + "/oauth/token",
-		"registration_endpoint":                 issuer + "/register",
-		"response_types_supported":              []string{"code"},
-		"grant_types_supported":                 []string{"authorization_code", "refresh_token"},
-		"code_challenge_methods_supported":      []string{"S256"},
-		"token_endpoint_auth_methods_supported": []string{"none"},
-		"resource_indicators_supported":         true,
+		"issuer":                           issuer,
+		"authorization_endpoint":           issuer + "/oauth/authorize",
+		"token_endpoint":                   issuer + "/oauth/token",
+		"registration_endpoint":            issuer + "/register",
+		"response_types_supported":         []string{"code"},
+		"grant_types_supported":            []string{"authorization_code", "refresh_token"},
+		"code_challenge_methods_supported": []string{"S256"},
+		"token_endpoint_auth_methods_supported": []string{
+			auth.OAuthTokenEndpointAuthNone,
+			auth.OAuthTokenEndpointAuthClientSecretPost,
+		},
+		"resource_indicators_supported": true,
 	}
 }
 func issuerFor(cfg config.Config, r *http.Request) string {
@@ -609,12 +622,25 @@ func clientAuthenticationFailureReason(r *http.Request, grantType string, store 
 	if err := r.ParseForm(); err != nil {
 		return "form_parse_failed"
 	}
-	if len(r.PostForm["client_secret"]) != 0 {
-		return "client_secret_present"
-	}
 	clientID := strings.TrimSpace(r.PostForm.Get("client_id"))
-	if !store.ValidateClientID(clientID) {
+	registration, ok := store.ClientRegistration(clientID)
+	if !ok {
 		return "client_id_unregistered"
+	}
+	switch registration.TokenEndpointAuthMethod {
+	case auth.OAuthTokenEndpointAuthNone:
+		if len(r.PostForm["client_secret"]) != 0 {
+			return "client_secret_present"
+		}
+	case auth.OAuthTokenEndpointAuthClientSecretPost:
+		if len(r.PostForm["client_secret"]) != 1 || r.PostForm.Get("client_secret") == "" {
+			return "client_secret_missing"
+		}
+		if !store.ValidateClientSecret(clientID, r.PostForm.Get("client_secret")) {
+			return "client_secret_invalid"
+		}
+	default:
+		return "client_auth_method_unsupported"
 	}
 	if !store.ClientAllowsGrant(clientID, grantType) {
 		return "grant_not_allowed"

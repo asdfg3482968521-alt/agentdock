@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net"
 	"net/http"
 	"path/filepath"
 	"time"
@@ -57,6 +58,7 @@ func Serve(ctx context.Context, server *mcp.Server, runtime runtimeapi.Runtime, 
 
 	addr := fmt.Sprintf("%s:%d", cfg.Host, cfg.Port)
 	httpServer := newHTTPServer(addr, loggingMiddleware(mux))
+	httpServer.BaseContext = func(net.Listener) context.Context { return ctx }
 	slog.Info("http server listening", "addr", addr)
 	return serveHTTP(ctx, httpServer)
 }

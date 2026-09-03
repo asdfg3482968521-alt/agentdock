@@ -325,7 +325,7 @@ func TestOAuthRegistrationRejectsInvalidMetadata(t *testing.T) {
 		`{"token_endpoint_auth_method":"none"}`,
 		`{"redirect_uris":["https://client.example/callback"]}`,
 		`{"redirect_uris":["http://attacker.example/callback"],"token_endpoint_auth_method":"none"}`,
-		`{"redirect_uris":["https://client.example/callback"],"token_endpoint_auth_method":"client_secret_post"}`,
+		`{"redirect_uris":["https://client.example/callback"],"token_endpoint_auth_method":"client_secret_basic"}`,
 		`{"redirect_uris":["https://client.example/callback"],"grant_types":["client_credentials"]}`,
 		`{"redirect_uris":["https://client.example/callback"],"grant_types":["refresh_token"]}`,
 	}

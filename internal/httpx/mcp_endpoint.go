@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"mime"
 	"net/http"
 	"strings"
 	"time"
@@ -54,6 +55,10 @@ func mcpEndpointHandler(server *mcp.Server, cfg config.Config, oauthStore *auth.
 			http.Error(w, "unauthorized", http.StatusUnauthorized)
 			return
 		}
+		if r.Method == http.MethodGet && acceptsEventStream(r.Header.Values("Accept")) {
+			serveMCPStandaloneSSE(w, r)
+			return
+		}
 		if r.Method == http.MethodPost && !prepareMCPRequestBody(w, r) {
 			return
 		}
@@ -61,6 +66,50 @@ func mcpEndpointHandler(server *mcp.Server, cfg config.Config, oauthStore *auth.
 		transport.ServeHTTP(w, r.WithContext(ctx))
 	}
 }
+
+func acceptsEventStream(values []string) bool {
+	for _, value := range values {
+		for _, candidate := range strings.Split(value, ",") {
+			mediaType, _, err := mime.ParseMediaType(strings.TrimSpace(candidate))
+			if err == nil && strings.EqualFold(mediaType, "text/event-stream") {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func serveMCPStandaloneSSE(w http.ResponseWriter, r *http.Request) {
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		http.Error(w, "streaming unsupported", http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("Connection", "keep-alive")
+	w.Header().Set("X-Accel-Buffering", "no")
+	w.WriteHeader(http.StatusOK)
+	if _, err := io.WriteString(w, ": connected\n\n"); err != nil {
+		return
+	}
+	flusher.Flush()
+
+	ticker := time.NewTicker(15 * time.Second)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-r.Context().Done():
+			return
+		case <-ticker.C:
+			if _, err := io.WriteString(w, ": keepalive\n\n"); err != nil {
+				return
+			}
+			flusher.Flush()
+		}
+	}
+}
+
 func prepareMCPRequestBody(w http.ResponseWriter, r *http.Request) bool {
 	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, 1<<20))
 	if err != nil {

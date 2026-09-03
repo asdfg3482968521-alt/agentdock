@@ -69,6 +69,37 @@ func TestMCPEndpointNotificationReturnsAcceptedWithEmptyBody(t *testing.T) {
 	}
 }
 
+func TestMCPEndpointAcceptsAuthenticatedStandaloneSSE(t *testing.T) {
+	cfg := testConfig(t)
+	cfg.AuthToken = "secret-token"
+	handler := mcpEndpointHandler(mcp.NewServer(nil, cfg), cfg, auth.NewOAuthStore())
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	req := httptest.NewRequest(http.MethodGet, "/mcp", nil).WithContext(ctx)
+	req.Header.Set("Accept", "text/event-stream")
+	req.Header.Set("Authorization", "Bearer secret-token")
+	req.Header.Set("Mcp-Protocol-Version", "2025-11-25")
+	recorder := httptest.NewRecorder()
+	handler.ServeHTTP(recorder, req)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d; body=%s", recorder.Code, http.StatusOK, recorder.Body.String())
+	}
+	if got := recorder.Header().Get("Content-Type"); got != "text/event-stream" {
+		t.Fatalf("Content-Type = %q, want text/event-stream", got)
+	}
+	if got := recorder.Header().Get("Cache-Control"); got != "no-cache" {
+		t.Fatalf("Cache-Control = %q, want no-cache", got)
+	}
+	if !recorder.Flushed {
+		t.Fatal("SSE response was not flushed")
+	}
+	if body := recorder.Body.String(); body != ": connected\n\n" {
+		t.Fatalf("body = %q, want initial SSE comment", body)
+	}
+}
+
 func TestMCPEndpointRejectsTrailingJSONValue(t *testing.T) {
 	cfg := testConfig(t)
 	runtime, err := app.NewRuntime(cfg)
@@ -390,15 +421,16 @@ func TestServerCardDeclaresOAuthOnlyWhenOAuthEnabled(t *testing.T) {
 	}
 }
 
-func TestOAuthMetadataUsesPublicPKCEClients(t *testing.T) {
+func TestOAuthMetadataAdvertisesPKCEClientAuthMethods(t *testing.T) {
 	cfg := testConfig(t)
 	cfg.OAuthEnabled = true
 	cfg.OAuthServerURL = "https://agentdock.example.com"
 
 	metadata := oauthMetadata(cfg, httptest.NewRequest(http.MethodGet, "/.well-known/oauth-authorization-server", nil))
 	methods, ok := metadata["token_endpoint_auth_methods_supported"].([]string)
-	if !ok || len(methods) != 1 || methods[0] != "none" {
-		t.Fatalf("auth methods = %#v, want none", metadata["token_endpoint_auth_methods_supported"])
+	if !ok || !containsString(methods, auth.OAuthTokenEndpointAuthNone) ||
+		!containsString(methods, auth.OAuthTokenEndpointAuthClientSecretPost) {
+		t.Fatalf("auth methods = %#v, want none and client_secret_post", metadata["token_endpoint_auth_methods_supported"])
 	}
 	if supported, ok := metadata["resource_indicators_supported"].(bool); !ok || !supported {
 		t.Fatalf("resource_indicators_supported = %#v", metadata["resource_indicators_supported"])
