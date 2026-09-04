@@ -135,7 +135,7 @@ func NewRuntime(cfg config.Config) (*Runtime, error) {
 			} else {
 				nativeClient, clientErr := opencodenative.NewClient(
 					opencodenative.Config{BaseURL: cfg.OpenCodeNativeURL},
-					&http.Client{Timeout: 3 * time.Minute},
+				&http.Client{Timeout: 3 * time.Minute},
 				)
 				if clientErr != nil {
 					runtime.recordStartupIssue("opencode_native_client", clientErr)
@@ -352,7 +352,7 @@ func persistentJobLimits(cfg config.Config) jobruntime.Limits {
 		limits.MemoryOutputBytesPerJob = int64(cfg.JobMemoryOutputBytes)
 	}
 	if cfg.JobResponseOutputBytes > 0 {
-		limits.MaxOutputBytesPerResponse = cfg.JobResponseOutputBytes
+		limits.MaxOutputBytesPerResponse = int64(cfg.JobResponseOutputBytes)
 	}
 	if cfg.JobDiskSpoolBytes > 0 {
 		limits.MaxDiskOutputBytesPerJob = int64(cfg.JobDiskSpoolBytes)
@@ -489,6 +489,13 @@ func validateTopLevelArguments(spec ToolSpec, args map[string]any) error {
 func (r *Runtime) serverInfo() Result {
 	names := r.ToolNames()
 
+	// 严格校验 outputSchema 的客户端（如 Notion）会把 null 视为校验失败：
+	// 所有声明为 array 的字段在为空时也必须序列化为 []，不能是 null。
+	openCodeRuntimes := r.openCodeSummaries()
+	if openCodeRuntimes == nil {
+		openCodeRuntimes = []opencoderuntime.Summary{}
+	}
+
 	// server_info 是排障入口：这里按主题分组保留字段，避免新增运行能力时
 	// 把自检输出重新堆成一行难以审查的 map。
 	return Result{
@@ -523,9 +530,9 @@ func (r *Runtime) serverInfo() Result {
 		"acp_agent":           r.cfg.ACPAgentName,
 		"opencode_enabled":    r.cfg.OpenCodeEnabled,
 		"opencode_manifest":   r.cfg.OpenCodeRuntimeManifest,
-		"opencode_runtimes":   r.openCodeSummaries(),
-		"opencode_tools":      append([]string(nil), opencoderuntime.RequiredTools...),
-		"trusted_proxy_cidrs": append([]string(nil), r.cfg.TrustedProxyCIDRs...),
+		"opencode_runtimes":   openCodeRuntimes,
+		"opencode_tools":      append([]string{}, opencoderuntime.RequiredTools...),
+		"trusted_proxy_cidrs": append([]string{}, r.cfg.TrustedProxyCIDRs...),
 
 		"degraded_startup": len(r.startupIssues) > 0,
 		"startup_issues":   r.startupIssueList(),
