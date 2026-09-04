@@ -135,7 +135,7 @@ func NewRuntime(cfg config.Config) (*Runtime, error) {
 			} else {
 				nativeClient, clientErr := opencodenative.NewClient(
 					opencodenative.Config{BaseURL: cfg.OpenCodeNativeURL},
-				&http.Client{Timeout: 3 * time.Minute},
+					&http.Client{Timeout: 3 * time.Minute},
 				)
 				if clientErr != nil {
 					runtime.recordStartupIssue("opencode_native_client", clientErr)
@@ -352,7 +352,7 @@ func persistentJobLimits(cfg config.Config) jobruntime.Limits {
 		limits.MemoryOutputBytesPerJob = int64(cfg.JobMemoryOutputBytes)
 	}
 	if cfg.JobResponseOutputBytes > 0 {
-		limits.MaxOutputBytesPerResponse = int64(cfg.JobResponseOutputBytes)
+		limits.MaxOutputBytesPerResponse = cfg.JobResponseOutputBytes
 	}
 	if cfg.JobDiskSpoolBytes > 0 {
 		limits.MaxDiskOutputBytesPerJob = int64(cfg.JobDiskSpoolBytes)
