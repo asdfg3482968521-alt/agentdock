@@ -43,19 +43,74 @@ func NewServer(runtime *app.Runtime, cfg config.Config) *Server {
 			server.registerTool(name, cfg)
 		}
 	}
-	server.httpHandler = mcpsdk.NewStreamableHTTPHandler(
-		func(*http.Request) *mcpsdk.Server { return server.sdk },
-		&mcpsdk.StreamableHTTPOptions{
-			// 仅在显式配置公网 URL 且启用认证时放宽 SDK 的 localhost Host 校验。
-			// 反代或 Tunnel 会保留公网 Host，入口仍由静态 Token 或 OAuth resource 绑定保护。
-			DisableLocalhostProtection:   cfg.OAuthServerURL != "" && cfg.AuthRequired(),
-			Stateless:                    true,
-			JSONResponse:                 true,
-			MaxRequestBodyBytes:          1 << 20,
-			PropagateRequestCancellation: true,
-		},
-	)
+	commonOptions := mcpsdk.StreamableHTTPOptions{
+		// 仅在显式配置公网 URL 且启用认证时放宽 SDK 的 localhost Host 校验。
+		// 反代或 Tunnel 会保留公网 Host，入口仍由静态 Token 或 OAuth resource 绑定保护。
+		DisableLocalhostProtection:   cfg.OAuthServerURL != "" && cfg.AuthRequired(),
+		JSONResponse:                 true,
+		MaxRequestBodyBytes:          1 << 20,
+		PropagateRequestCancellation: true,
+	}
+	statefulOptions := commonOptions
+	statefulOptions.Stateless = false
+	statelessOptions := commonOptions
+	statelessOptions.Stateless = true
+	server.httpHandler = &protocolAdaptiveHTTPHandler{
+		stateful: mcpsdk.NewStreamableHTTPHandler(
+			func(*http.Request) *mcpsdk.Server { return server.sdk },
+			&statefulOptions,
+		),
+		stateless: mcpsdk.NewStreamableHTTPHandler(
+			func(*http.Request) *mcpsdk.Server { return server.sdk },
+			&statelessOptions,
+		),
+	}
 	return server
+}
+
+const sessionlessMCPProtocolVersion = "2026-07-28"
+
+type protocolAdaptiveHTTPHandler struct {
+	stateful  http.Handler
+	stateless http.Handler
+}
+
+func (h *protocolAdaptiveHTTPHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	if useStatelessMCPTransport(r) {
+		h.stateless.ServeHTTP(w, r)
+		return
+	}
+	h.stateful.ServeHTTP(w, r)
+}
+
+func useStatelessMCPTransport(r *http.Request) bool {
+	if strings.TrimSpace(r.Header.Get("Mcp-Session-Id")) != "" {
+		return false
+	}
+	if version := strings.TrimSpace(r.Header.Get("Mcp-Protocol-Version")); version != "" {
+		return version >= sessionlessMCPProtocolVersion
+	}
+	if r.Method != http.MethodPost || r.Body == nil {
+		return false
+	}
+
+	body, err := io.ReadAll(r.Body)
+	if err != nil {
+		return false
+	}
+	r.Body = io.NopCloser(strings.NewReader(string(body)))
+	r.ContentLength = int64(len(body))
+
+	var message struct {
+		Method string `json:"method"`
+		Params struct {
+			ProtocolVersion string `json:"protocolVersion"`
+		} `json:"params"`
+	}
+	if err := json.Unmarshal(body, &message); err != nil || message.Method != "initialize" {
+		return false
+	}
+	return strings.TrimSpace(message.Params.ProtocolVersion) >= sessionlessMCPProtocolVersion
 }
 
 func (s *Server) AgentDockContext(ctx context.Context) (app.Result, error) {
@@ -158,176 +213,3 @@ func (s *Server) callTool(ctx context.Context, name string, request *mcpsdk.Call
 	slog.Info("tool finished", finishedAttrs...)
 
 	encoded, encodeErr := json.Marshal(toolEnvelope(name, result, err))
-	if encodeErr != nil {
-		return nil, fmt.Errorf("encode MCP tool result: %w", encodeErr)
-	}
-	var response mcpsdk.CallToolResult
-	if decodeErr := json.Unmarshal(encoded, &response); decodeErr != nil {
-		return nil, fmt.Errorf("decode MCP tool result: %w", decodeErr)
-	}
-	return &response, nil
-}
-
-func (s *Server) invokeTool(ctx context.Context, name string, arguments map[string]any, requestID, plane string) (result app.Result, err error) {
-	defer func() {
-		if recovered := recover(); recovered != nil {
-			slog.Error("tool panic contained", "request_id", requestID, "server_instance", s.instanceID, "tool", name, "plane", plane, "panic", recovered)
-			err = &app.ToolError{
-				Code: "MCP_TOOL_PANIC", Message: "tool request failed unexpectedly", Category: "runtime", Retryable: false,
-				Details: map[string]any{"tool": name, "plane": plane},
-			}
-		}
-	}()
-	if s == nil || s.runtime == nil {
-		return nil, &app.ToolError{
-			Code: "MCP_RUNTIME_UNAVAILABLE", Message: "AgentDock runtime is unavailable", Category: "runtime", Retryable: true,
-			Details: map[string]any{"tool": name, "plane": plane},
-		}
-	}
-	return s.runtime.Call(ctx, name, arguments)
-}
-
-func toolRequestPlane(name string) string {
-	switch name {
-	case "server_info", "agentdock_context", "mcp_manage", "mcp_tool_search", "mcp_tool_inspect":
-		return "CONTROL_PLANE"
-	default:
-		return "EXECUTION_PLANE"
-	}
-}
-
-func toolMetadata(def ToolDefinition) map[string]any {
-	meta := map[string]any{}
-	if len(def.FileArgRewritePaths) > 0 {
-		paths := append([]string(nil), def.FileArgRewritePaths...)
-		meta["file_arg_rewrite_paths"] = paths
-		meta["openai/fileParams"] = paths
-	}
-	if len(def.FileResultRewritePaths) > 0 {
-		paths := append([]string(nil), def.FileResultRewritePaths...)
-		meta["file_result_rewrite_paths"] = paths
-		meta["openai/fileResultPaths"] = paths
-		meta["openai/fileOutputs"] = paths
-	}
-	return meta
-}
-
-func cloneBoolPointer(value *bool) *bool {
-	if value == nil {
-		return nil
-	}
-	cloned := *value
-	return &cloned
-}
-
-type readCloser struct{ io.Reader }
-
-func (readCloser) Close() error { return nil }
-
-type writeCloser struct{ io.Writer }
-
-func (writeCloser) Close() error { return nil }
-
-func toolDescriptorsForNames(names []string) []map[string]any {
-	descriptors := make([]map[string]any, 0, len(names))
-	for _, name := range names {
-		def, _ := toolDefinition(name)
-		descriptor := map[string]any{
-			"name":         name,
-			"title":        def.Title,
-			"description":  def.Description,
-			"inputSchema":  inputSchema(name),
-			"outputSchema": outputSchema(name),
-		}
-		meta := toolMetadata(def)
-		if paths, ok := meta["file_arg_rewrite_paths"].([]string); ok {
-			descriptor["file_arg_rewrite_paths"] = paths
-		}
-		if paths, ok := meta["file_result_rewrite_paths"].([]string); ok {
-			descriptor["file_result_rewrite_paths"] = paths
-		}
-		if len(meta) > 0 {
-			descriptor["_meta"] = meta
-		}
-		descriptors = append(descriptors, descriptor)
-	}
-	return descriptors
-}
-
-func toolEnvelope(name string, structured any, err error) map[string]any {
-	if err != nil {
-		payload := map[string]any{"tool": name, "error": err.Error()}
-		var toolErr *app.ToolError
-		if errors.As(err, &toolErr) {
-			payload["code"] = toolErr.Code
-			payload["category"] = toolErr.Category
-			payload["retryable"] = toolErr.Retryable
-			payload["details"] = toolErr.Details
-			if toolErr.Code == "PERMISSION_REQUIRED" {
-				payload["permission_request"] = map[string]any{
-					"tool_name":  name,
-					"permission": toolErr.Details["permission"],
-					"status":     "required",
-				}
-			}
-		}
-		return map[string]any{"isError": true, "structuredContent": payload, "content": []map[string]any{{"type": "text", "text": pretty(payload)}}}
-	}
-	if name == "view_image" {
-		payload := asMap(structured)
-		if data, _ := payload["_mcp_image_base64"].(string); data != "" {
-			mimeType, _ := payload["_mcp_image_mime_type"].(string)
-			clean := cloneWithoutInternalImage(payload)
-			return map[string]any{"isError": false, "structuredContent": clean, "content": []map[string]any{{"type": "image", "data": data, "mimeType": mimeType}}}
-		}
-	}
-	if name == "mcp_tool_call" || strings.HasPrefix(name, "opencode_") {
-		return dynamicMCPToolEnvelope(structured)
-	}
-	return map[string]any{"isError": false, "structuredContent": structured, "content": []map[string]any{{"type": "text", "text": pretty(structured)}}}
-}
-
-func dynamicMCPToolEnvelope(structured any) map[string]any {
-	payload := asMap(structured)
-	remote, _ := payload["result"].(map[string]any)
-	isError, _ := remote["isError"].(bool)
-	content, ok := remote["content"]
-	if !ok {
-		content = []map[string]any{{"type": "text", "text": pretty(payload)}}
-	}
-	return map[string]any{
-		"isError":           isError,
-		"structuredContent": payload,
-		"content":           content,
-	}
-}
-
-func cloneWithoutInternalImage(value map[string]any) map[string]any {
-	clean := make(map[string]any, len(value))
-	for key, item := range value {
-		if key == "_mcp_image_base64" || key == "_mcp_image_mime_type" {
-			continue
-		}
-		clean[key] = item
-	}
-	return clean
-}
-
-func asMap(value any) map[string]any {
-	switch typed := value.(type) {
-	case map[string]any:
-		return typed
-	case app.Result:
-		return map[string]any(typed)
-	default:
-		return map[string]any{}
-	}
-}
-
-func pretty(value any) string {
-	data, err := json.MarshalIndent(value, "", "  ")
-	if err != nil {
-		return fmt.Sprint(value)
-	}
-	return string(data)
-}
