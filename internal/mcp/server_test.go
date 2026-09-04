@@ -221,6 +221,24 @@ func TestOfficialSDKToolsListPreservesFrozenD2AgentSchemas(t *testing.T) {
 	}
 }
 
+func TestAdaptiveStreamableHTTPKeepsNewProtocolStateless(t *testing.T) {
+	cfg := config.Config{}
+	server := NewServer(nil, cfg)
+
+	request := httptest.NewRequest(http.MethodPost, "http://localhost/mcp", strings.NewReader(`{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2026-07-28","capabilities":{},"clientInfo":{"name":"new-client","version":"1.0"}}}`))
+	request.Header.Set("Content-Type", "application/json")
+	request.Header.Set("Accept", "application/json, text/event-stream")
+	response := httptest.NewRecorder()
+	server.HTTPHandler().ServeHTTP(response, request)
+
+	if response.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d; body=%s", response.Code, http.StatusOK, response.Body.String())
+	}
+	if sessionID := response.Header().Get("Mcp-Session-Id"); sessionID != "" {
+		t.Fatalf("Mcp-Session-Id = %q, want empty for sessionless protocol", sessionID)
+	}
+}
+
 func TestStreamableHTTPHandlerAllowsAuthenticatedPublicHost(t *testing.T) {
 	for name, cfg := range map[string]config.Config{
 		"static token": {
