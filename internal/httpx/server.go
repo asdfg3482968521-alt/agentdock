@@ -305,8 +305,11 @@ func mcpEndpointHandler(server *mcp.Server, cfg config.Config, oauthStore *auth.
 			http.Error(w, "unauthorized", http.StatusUnauthorized)
 			return
 		}
-		if isNotionSessionlessSSEProbe(r) {
-			serveNotionSessionlessSSEProbe(w)
+		if r.Method == http.MethodGet && acceptsEventStream(r.Header.Values("Accept")) {
+			// Notion 的 MCP 客户端会在会话外发起 GET SSE 流（不携带 Mcp-Session-Id）。
+			// 统一用独立的保活 SSE 流应答，不进入 SDK 的会话校验（与验证可连通的
+			// fix/notion-mcp-compat-20260903 行为一致）。
+			serveMCPStandaloneSSE(w, r)
 			return
 		}
 		if r.Method == http.MethodPost && !prepareMCPRequestBody(w, r) {
@@ -327,32 +330,6 @@ func acceptsEventStream(values []string) bool {
 		}
 	}
 	return false
-}
-
-func isNotionSessionlessSSEProbe(r *http.Request) bool {
-	if r.Method != http.MethodGet || strings.TrimSpace(r.Header.Get("Mcp-Session-Id")) != "" {
-		return false
-	}
-	if !acceptsEventStream(r.Header.Values("Accept")) {
-		return false
-	}
-	return strings.HasPrefix(strings.TrimSpace(r.UserAgent()), "Notion-MCP-Client/")
-}
-
-func serveNotionSessionlessSSEProbe(w http.ResponseWriter) {
-	flusher, ok := w.(http.Flusher)
-	if !ok {
-		http.Error(w, "streaming unsupported", http.StatusInternalServerError)
-		return
-	}
-	w.Header().Set("Content-Type", "text/event-stream")
-	w.Header().Set("Cache-Control", "no-cache, no-transform")
-	w.Header().Set("Connection", "keep-alive")
-	w.WriteHeader(http.StatusOK)
-	if _, err := io.WriteString(w, ": ok\n\n"); err != nil {
-		return
-	}
-	flusher.Flush()
 }
 
 func serveMCPStandaloneSSE(w http.ResponseWriter, r *http.Request) {

@@ -43,74 +43,22 @@ func NewServer(runtime *app.Runtime, cfg config.Config) *Server {
 			server.registerTool(name, cfg)
 		}
 	}
-	commonOptions := mcpsdk.StreamableHTTPOptions{
-		// 仅在显式配置公网 URL 且启用认证时放宽 SDK 的 localhost Host 校验。
-		// 反代或 Tunnel 会保留公网 Host，入口仍由静态 Token 或 OAuth resource 绑定保护。
-		DisableLocalhostProtection:   cfg.OAuthServerURL != "" && cfg.AuthRequired(),
-		JSONResponse:                 true,
-		MaxRequestBodyBytes:          1 << 20,
-		PropagateRequestCancellation: true,
-	}
-	statefulOptions := commonOptions
-	statefulOptions.Stateless = false
-	statelessOptions := commonOptions
-	statelessOptions.Stateless = true
-	server.httpHandler = &protocolAdaptiveHTTPHandler{
-		stateful: mcpsdk.NewStreamableHTTPHandler(
-			func(*http.Request) *mcpsdk.Server { return server.sdk },
-			&statefulOptions,
-		),
-		stateless: mcpsdk.NewStreamableHTTPHandler(
-			func(*http.Request) *mcpsdk.Server { return server.sdk },
-			&statelessOptions,
-		),
-	}
+	server.httpHandler = mcpsdk.NewStreamableHTTPHandler(
+		func(*http.Request) *mcpsdk.Server { return server.sdk },
+		&mcpsdk.StreamableHTTPOptions{
+			// 仅在显式配置公网 URL 且启用认证时放宽 SDK 的 localhost Host 校验。
+			// 反代或 Tunnel 会保留公网 Host，入口仍由静态 Token 或 OAuth resource 绑定保护。
+			DisableLocalhostProtection: cfg.OAuthServerURL != "" && cfg.AuthRequired(),
+			// /mcp 始终保持无会话传输：Notion 的 MCP 客户端不会稳定携带
+			// Mcp-Session-Id（initialize 之后也会额外发起不带会话头的 GET SSE 流），
+			// 有状态会话模式会把这些请求全部拒绝，直接导致 Notion 连接失败。
+			Stateless:                    true,
+			JSONResponse:                 true,
+			MaxRequestBodyBytes:          1 << 20,
+			PropagateRequestCancellation: true,
+		},
+	)
 	return server
-}
-
-const sessionlessMCPProtocolVersion = "2026-07-28"
-
-type protocolAdaptiveHTTPHandler struct {
-	stateful  http.Handler
-	stateless http.Handler
-}
-
-func (h *protocolAdaptiveHTTPHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	if useStatelessMCPTransport(r) {
-		h.stateless.ServeHTTP(w, r)
-		return
-	}
-	h.stateful.ServeHTTP(w, r)
-}
-
-func useStatelessMCPTransport(r *http.Request) bool {
-	if strings.TrimSpace(r.Header.Get("Mcp-Session-Id")) != "" {
-		return false
-	}
-	if version := strings.TrimSpace(r.Header.Get("Mcp-Protocol-Version")); version != "" {
-		return version >= sessionlessMCPProtocolVersion
-	}
-	if r.Method != http.MethodPost || r.Body == nil {
-		return false
-	}
-
-	body, err := io.ReadAll(r.Body)
-	if err != nil {
-		return false
-	}
-	r.Body = io.NopCloser(strings.NewReader(string(body)))
-	r.ContentLength = int64(len(body))
-
-	var message struct {
-		Method string `json:"method"`
-		Params struct {
-			ProtocolVersion string `json:"protocolVersion"`
-		} `json:"params"`
-	}
-	if err := json.Unmarshal(body, &message); err != nil || message.Method != "initialize" {
-		return false
-	}
-	return strings.TrimSpace(message.Params.ProtocolVersion) >= sessionlessMCPProtocolVersion
 }
 
 func (s *Server) AgentDockContext(ctx context.Context) (app.Result, error) {
