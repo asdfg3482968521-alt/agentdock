@@ -1,0 +1,74 @@
+name: One-time Cloud Export - AgentDock Windows
+
+on:
+  push:
+    branches:
+      - production-current-agentdock
+    paths:
+      - '.github/workflows/cloud-export-agentdock-once.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  build-and-export:
+    runs-on: windows-latest
+    timeout-minutes: 20
+    env:
+      TARGET_SHA: f79427bf0fde77d9bc689830ed5ca41ae4d97d22
+
+    steps:
+      - name: Checkout exact source commit
+        uses: actions/checkout@v4
+        with:
+          ref: f79427bf0fde77d9bc689830ed5ca41ae4d97d22
+          fetch-depth: 0
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Test affected packages
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          go test ./internal/app ./internal/httpx ./internal/mcp ./internal/opencode
+
+      - name: Build exact Windows amd64 artifact
+        shell: pwsh
+        env:
+          CGO_ENABLED: '0'
+          GOOS: windows
+          GOARCH: amd64
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $buildDate = [DateTime]::UtcNow.ToString('yyyy-MM-ddTHH:mm:ssZ')
+          $ldflags = "-s -w -X github.com/uvwt/agentdock/internal/buildinfo.Commit=$env:TARGET_SHA -X github.com/uvwt/agentdock/internal/buildinfo.BuildDate=$buildDate"
+          New-Item -ItemType Directory -Path dist -Force | Out-Null
+          go build -trimpath -ldflags $ldflags -o dist/agentdock.exe ./cmd/agentdock
+          & .\dist\agentdock.exe version --json | Set-Content -Encoding utf8 .\dist\version.json
+          $hash = (Get-FileHash -LiteralPath .\dist\agentdock.exe -Algorithm SHA256).Hash.ToLowerInvariant()
+          [IO.File]::WriteAllText('.\dist\agentdock.exe.sha256', "$hash  agentdock.exe`n", [Text.UTF8Encoding]::new($false))
+          [IO.File]::WriteAllText('.\dist\source_commit.txt', "$env:TARGET_SHA`n", [Text.UTF8Encoding]::new($false))
+
+      - name: Export artifact to temporary private branch
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $exportDir = Join-Path $env:RUNNER_TEMP 'agentdock-export'
+          New-Item -ItemType Directory -Path $exportDir -Force | Out-Null
+          Copy-Item .\dist\agentdock.exe $exportDir
+          Copy-Item .\dist\agentdock.exe.sha256 $exportDir
+          Copy-Item .\dist\version.json $exportDir
+          Copy-Item .\dist\source_commit.txt $exportDir
+
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git checkout --orphan agentdock-artifact-transfer-work
+          git rm -rf .
+          Copy-Item (Join-Path $exportDir '*') .
+          git add agentdock.exe agentdock.exe.sha256 version.json source_commit.txt
+          git commit -m "artifact: AgentDock Windows $env:TARGET_SHA"
+          git push --force origin HEAD:refs/heads/agentdock-artifact-transfer
