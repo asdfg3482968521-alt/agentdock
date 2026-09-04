@@ -36,6 +36,7 @@ type Config struct {
 	Port                              int
 	AuthToken                         string
 	OAuthEnabled                      bool
+	OAuthRequired                     bool
 	OAuthServerURL                    string
 	OAuthAccessTokenTTLSeconds        int64
 	OAuthAccessTokenNeverExpires      bool
@@ -88,6 +89,10 @@ func FromEnv() (Config, error) {
 		return Config{}, err
 	}
 	oauthEnabled, err := getenvBool("AGENTDOCK_OAUTH_ENABLED", false)
+	if err != nil {
+		return Config{}, err
+	}
+	oauthRequired, err := getenvBool("AGENTDOCK_OAUTH_REQUIRED", false)
 	if err != nil {
 		return Config{}, err
 	}
@@ -176,6 +181,7 @@ func FromEnv() (Config, error) {
 		Port:                              port,
 		AuthToken:                         os.Getenv("AGENTDOCK_AUTH_TOKEN"),
 		OAuthEnabled:                      oauthEnabled,
+		OAuthRequired:                     oauthRequired,
 		OAuthServerURL:                    os.Getenv("AGENTDOCK_SERVER_URL"),
 		OAuthAccessTokenTTLSeconds:        oauthAccessTokenTTLSeconds,
 		OAuthAccessTokenNeverExpires:      oauthAccessTokenNeverExpires,
@@ -373,7 +379,7 @@ func (c *Config) Normalize() error {
 			return fmt.Errorf("InstructionsFile must be a regular file: %s", c.InstructionsFile)
 		}
 		if info.Size() > maxInstructionsFileBytes {
-			return fmt.Errorf("InstructionsFile %s exceeds %d bytes", c.InstructionsFile, maxInstructionsFileBytes)
+			return fmt.Errorf("InstructionsFile %s exceeds %d bytes", c.InstructionsFile)
 		}
 
 		file, err := os.Open(c.InstructionsFile)
@@ -388,7 +394,7 @@ func (c *Config) Normalize() error {
 			return fmt.Errorf("read InstructionsFile %s: %w", c.InstructionsFile, err)
 		}
 		if len(data) > maxInstructionsFileBytes {
-			return fmt.Errorf("InstructionsFile %s exceeds %d bytes", c.InstructionsFile, maxInstructionsFileBytes)
+			return fmt.Errorf("InstructionsFile %s exceeds %d bytes", c.InstructionsFile)
 		}
 		if !utf8.Valid(data) {
 			return fmt.Errorf("InstructionsFile must contain valid UTF-8: %s", c.InstructionsFile)
@@ -475,6 +481,11 @@ func (c Config) ValidateAuth() error {
 	// AgentDock 暴露命令和文件写入能力，非回环无认证不是可接受的默认配置。
 	if !c.Stdio && !c.AuthRequired() && !isLoopbackBindHost(c.Host) {
 		return fmt.Errorf("non-loopback host %q requires AGENTDOCK_AUTH_TOKEN or OAuth", c.Host)
+	}
+	// 强制 OAuth：设置 AGENTDOCK_OAUTH_REQUIRED=true 后，任何监听形态下
+	// 都不允许静默退化为仅 Bearer——OAuth 没配好就直接拒绝启动。
+	if c.OAuthRequired && !c.OAuthEnabled {
+		return errors.New("AGENTDOCK_OAUTH_REQUIRED=true 要求强制启用 OAuth，但 AGENTDOCK_OAUTH_ENABLED 未开启；请设置 AGENTDOCK_SERVER_URL 并开启 AGENTDOCK_OAUTH_ENABLED=true，拒绝以仅 Bearer 方式启动")
 	}
 	if !c.OAuthEnabled {
 		return nil
@@ -632,7 +643,7 @@ func getenvBool(key string, fallback bool) (bool, error) {
 	return parsed, nil
 }
 
-func getenvOAuthAccessTokenTTL(key string, fallback int64) (seconds int64, never bool, err error) {
+func getenvOAuthAccessTokenTTL(key string) (seconds int64, never bool, err error) {
 	value := strings.TrimSpace(os.Getenv(key))
 	if value == "" {
 		return fallback, false, nil
