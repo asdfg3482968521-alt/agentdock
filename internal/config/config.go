@@ -643,7 +643,7 @@ func getenvBool(key string, fallback bool) (bool, error) {
 	return parsed, nil
 }
 
-func getenvOAuthAccessTokenTTL(key string) (seconds int64, never bool, err error) {
+func getenvOAuthAccessTokenTTL(key string, fallback int64) (seconds int64, never bool, err error) {
 	value := strings.TrimSpace(os.Getenv(key))
 	if value == "" {
 		return fallback, false, nil
