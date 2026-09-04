@@ -305,6 +305,11 @@ func mcpEndpointHandler(server *mcp.Server, cfg config.Config, oauthStore *auth.
 			http.Error(w, "unauthorized", http.StatusUnauthorized)
 			return
 		}
+		if isNotionSessionlessSSEProbe(r) {
+			w.Header().Set("Allow", "POST")
+			http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
+			return
+		}
 		if r.Method == http.MethodPost && !prepareMCPRequestBody(w, r) {
 			return
 		}
@@ -323,6 +328,16 @@ func acceptsEventStream(values []string) bool {
 		}
 	}
 	return false
+}
+
+func isNotionSessionlessSSEProbe(r *http.Request) bool {
+	if r.Method != http.MethodGet || strings.TrimSpace(r.Header.Get("Mcp-Session-Id")) != "" {
+		return false
+	}
+	if !acceptsEventStream(r.Header.Values("Accept")) {
+		return false
+	}
+	return strings.HasPrefix(strings.TrimSpace(r.UserAgent()), "Notion-MCP-Client/")
 }
 
 func serveMCPStandaloneSSE(w http.ResponseWriter, r *http.Request) {

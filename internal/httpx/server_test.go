@@ -125,6 +125,35 @@ func TestMCPEndpointAcceptsAuthenticatedStandaloneSSE(t *testing.T) {
 	if body := recorder.Body.String(); body != ": ok\n\n" {
 		t.Fatalf("body = %q, want SDK standalone SSE priming comment", body)
 	}
+
+	// Notion opens an additional standalone SSE GET without the session header.
+	// Treat that optional probe as unsupported instead of surfacing the SDK's
+	// 400 "GET requires an Mcp-Session-Id" error, while keeping the real
+	// session-bound SSE stream above on the SDK transport.
+	notionProbe := httptest.NewRequest(http.MethodGet, "/mcp", nil)
+	notionProbe.Header.Set("Accept", "text/event-stream")
+	notionProbe.Header.Set("Authorization", "Bearer secret-token")
+	notionProbe.Header.Set("User-Agent", "Notion-MCP-Client/1.0")
+	notionProbeResponse := httptest.NewRecorder()
+	handler.ServeHTTP(notionProbeResponse, notionProbe)
+	if notionProbeResponse.Code != http.StatusMethodNotAllowed {
+		t.Fatalf("Notion sessionless GET status = %d, want %d; body=%s", notionProbeResponse.Code, http.StatusMethodNotAllowed, notionProbeResponse.Body.String())
+	}
+	if got := notionProbeResponse.Header().Get("Allow"); got != "POST" {
+		t.Fatalf("Notion sessionless GET Allow = %q, want POST", got)
+	}
+
+	genericProbe := httptest.NewRequest(http.MethodGet, "/mcp", nil)
+	genericProbe.Header.Set("Accept", "text/event-stream")
+	genericProbe.Header.Set("Authorization", "Bearer secret-token")
+	genericProbeResponse := httptest.NewRecorder()
+	handler.ServeHTTP(genericProbeResponse, genericProbe)
+	if genericProbeResponse.Code != http.StatusBadRequest {
+		t.Fatalf("generic sessionless GET status = %d, want %d; body=%s", genericProbeResponse.Code, http.StatusBadRequest, genericProbeResponse.Body.String())
+	}
+	if body := genericProbeResponse.Body.String(); !strings.Contains(body, "GET requires an Mcp-Session-Id header") {
+		t.Fatalf("generic sessionless GET body = %q, want SDK missing-session error", body)
+	}
 }
 
 func TestMCPEndpointRejectsTrailingJSONValue(t *testing.T) {
