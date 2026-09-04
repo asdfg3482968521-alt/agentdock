@@ -78,12 +78,35 @@ func TestMCPEndpointAcceptsAuthenticatedStandaloneSSE(t *testing.T) {
 	}
 	handler := loggingMiddleware(mcpEndpointHandler(mcp.NewServer(runtime, cfg), cfg, auth.NewOAuthStore()))
 
+	initialize := newMCPRequest(http.MethodPost, "/mcp", strings.NewReader(`{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-11-25","capabilities":{},"clientInfo":{"name":"Notion-MCP-Client","version":"1.0"}}}`))
+	initialize.Header.Set("Authorization", "Bearer secret-token")
+	initializeResponse := httptest.NewRecorder()
+	handler.ServeHTTP(initializeResponse, initialize)
+	if initializeResponse.Code != http.StatusOK {
+		t.Fatalf("initialize status = %d, want %d; body=%s", initializeResponse.Code, http.StatusOK, initializeResponse.Body.String())
+	}
+	sessionID := initializeResponse.Header().Get("Mcp-Session-Id")
+	if sessionID == "" {
+		t.Fatal("initialize response missing Mcp-Session-Id")
+	}
+
+	initialized := newMCPRequest(http.MethodPost, "/mcp", strings.NewReader(`{"jsonrpc":"2.0","method":"notifications/initialized","params":{}}`))
+	initialized.Header.Set("Authorization", "Bearer secret-token")
+	initialized.Header.Set("Mcp-Protocol-Version", "2025-11-25")
+	initialized.Header.Set("Mcp-Session-Id", sessionID)
+	initializedResponse := httptest.NewRecorder()
+	handler.ServeHTTP(initializedResponse, initialized)
+	if initializedResponse.Code != http.StatusAccepted {
+		t.Fatalf("initialized status = %d, want %d; body=%s", initializedResponse.Code, http.StatusAccepted, initializedResponse.Body.String())
+	}
+
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	req := httptest.NewRequest(http.MethodGet, "/mcp", nil).WithContext(ctx)
 	req.Header.Set("Accept", "text/event-stream")
 	req.Header.Set("Authorization", "Bearer secret-token")
 	req.Header.Set("Mcp-Protocol-Version", "2025-11-25")
+	req.Header.Set("Mcp-Session-Id", sessionID)
 	recorder := httptest.NewRecorder()
 	handler.ServeHTTP(recorder, req)
 
@@ -93,14 +116,14 @@ func TestMCPEndpointAcceptsAuthenticatedStandaloneSSE(t *testing.T) {
 	if got := recorder.Header().Get("Content-Type"); got != "text/event-stream" {
 		t.Fatalf("Content-Type = %q, want text/event-stream", got)
 	}
-	if got := recorder.Header().Get("Cache-Control"); got != "no-cache" {
-		t.Fatalf("Cache-Control = %q, want no-cache", got)
+	if got := recorder.Header().Get("Cache-Control"); got != "no-cache, no-transform" {
+		t.Fatalf("Cache-Control = %q, want no-cache, no-transform", got)
 	}
 	if !recorder.Flushed {
 		t.Fatal("SSE response was not flushed")
 	}
-	if body := recorder.Body.String(); body != ": connected\n\n" {
-		t.Fatalf("body = %q, want initial SSE comment", body)
+	if body := recorder.Body.String(); body != ": ok\n\n" {
+		t.Fatalf("body = %q, want SDK standalone SSE priming comment", body)
 	}
 }
 
