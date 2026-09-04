@@ -72,41 +72,16 @@ func TestMCPEndpointNotificationReturnsAcceptedWithEmptyBody(t *testing.T) {
 func TestMCPEndpointAcceptsAuthenticatedStandaloneSSE(t *testing.T) {
 	cfg := testConfig(t)
 	cfg.AuthToken = "secret-token"
-	runtime, err := app.NewRuntime(cfg)
-	if err != nil {
-		t.Fatalf("new runtime: %v", err)
-	}
-	handler := loggingMiddleware(mcpEndpointHandler(mcp.NewServer(runtime, cfg), cfg, auth.NewOAuthStore()))
+	handler := mcpEndpointHandler(mcp.NewServer(nil, cfg), cfg, auth.NewOAuthStore())
 
-	initialize := newMCPRequest(http.MethodPost, "/mcp", strings.NewReader(`{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-11-25","capabilities":{},"clientInfo":{"name":"Notion-MCP-Client","version":"1.0"}}}`))
-	initialize.Header.Set("Authorization", "Bearer secret-token")
-	initializeResponse := httptest.NewRecorder()
-	handler.ServeHTTP(initializeResponse, initialize)
-	if initializeResponse.Code != http.StatusOK {
-		t.Fatalf("initialize status = %d, want %d; body=%s", initializeResponse.Code, http.StatusOK, initializeResponse.Body.String())
-	}
-	sessionID := initializeResponse.Header().Get("Mcp-Session-Id")
-	if sessionID == "" {
-		t.Fatal("initialize response missing Mcp-Session-Id")
-	}
-
-	initialized := newMCPRequest(http.MethodPost, "/mcp", strings.NewReader(`{"jsonrpc":"2.0","method":"notifications/initialized","params":{}}`))
-	initialized.Header.Set("Authorization", "Bearer secret-token")
-	initialized.Header.Set("Mcp-Protocol-Version", "2025-11-25")
-	initialized.Header.Set("Mcp-Session-Id", sessionID)
-	initializedResponse := httptest.NewRecorder()
-	handler.ServeHTTP(initializedResponse, initialized)
-	if initializedResponse.Code != http.StatusAccepted {
-		t.Fatalf("initialized status = %d, want %d; body=%s", initializedResponse.Code, http.StatusAccepted, initializedResponse.Body.String())
-	}
-
+	// Notion 会在不携带 Mcp-Session-Id 的情况下发起 GET SSE 流；服务端必须返回
+	// 独立的保活 SSE 流而不是 SDK 的会话错误。context 预先取消，保活循环立即退出。
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	req := httptest.NewRequest(http.MethodGet, "/mcp", nil).WithContext(ctx)
 	req.Header.Set("Accept", "text/event-stream")
 	req.Header.Set("Authorization", "Bearer secret-token")
 	req.Header.Set("Mcp-Protocol-Version", "2025-11-25")
-	req.Header.Set("Mcp-Session-Id", sessionID)
 	recorder := httptest.NewRecorder()
 	handler.ServeHTTP(recorder, req)
 
@@ -116,53 +91,33 @@ func TestMCPEndpointAcceptsAuthenticatedStandaloneSSE(t *testing.T) {
 	if got := recorder.Header().Get("Content-Type"); got != "text/event-stream" {
 		t.Fatalf("Content-Type = %q, want text/event-stream", got)
 	}
-	if got := recorder.Header().Get("Cache-Control"); got != "no-cache, no-transform" {
-		t.Fatalf("Cache-Control = %q, want no-cache, no-transform", got)
+	if got := recorder.Header().Get("Cache-Control"); got != "no-cache" {
+		t.Fatalf("Cache-Control = %q, want no-cache", got)
 	}
 	if !recorder.Flushed {
 		t.Fatal("SSE response was not flushed")
 	}
-	if body := recorder.Body.String(); body != ": ok\n\n" {
-		t.Fatalf("body = %q, want SDK standalone SSE priming comment", body)
+	if body := recorder.Body.String(); body != ": connected\n\n" {
+		t.Fatalf("body = %q, want initial SSE comment", body)
 	}
 
-	// Notion opens an additional standalone SSE GET without the session header
-	// even after the real session-bound SSE stream is active. Return a short
-	// compatibility probe with the SDK's priming comment, then end the response
-	// immediately so this extra stream cannot collide with the real MCP session
-	// or hang long enough to trigger a proxy timeout.
-	notionProbe := httptest.NewRequest(http.MethodGet, "/mcp", nil)
-	notionProbe.Header.Set("Accept", "text/event-stream")
-	notionProbe.Header.Set("Authorization", "Bearer secret-token")
-	notionProbe.Header.Set("User-Agent", "Notion-MCP-Client/1.0")
-	notionProbeResponse := httptest.NewRecorder()
-	handler.ServeHTTP(notionProbeResponse, notionProbe)
-	if notionProbeResponse.Code != http.StatusOK {
-		t.Fatalf("Notion sessionless GET status = %d, want %d; body=%s", notionProbeResponse.Code, http.StatusOK, notionProbeResponse.Body.String())
-	}
-	if got := notionProbeResponse.Header().Get("Content-Type"); got != "text/event-stream" {
-		t.Fatalf("Notion sessionless GET Content-Type = %q, want text/event-stream", got)
-	}
-	if got := notionProbeResponse.Header().Get("Cache-Control"); got != "no-cache, no-transform" {
-		t.Fatalf("Notion sessionless GET Cache-Control = %q, want no-cache, no-transform", got)
-	}
-	if !notionProbeResponse.Flushed {
-		t.Fatal("Notion sessionless GET response was not flushed")
-	}
-	if body := notionProbeResponse.Body.String(); body != ": ok\n\n" {
-		t.Fatalf("Notion sessionless GET body = %q, want short SSE priming comment", body)
-	}
-
-	genericProbe := httptest.NewRequest(http.MethodGet, "/mcp", nil)
+	// 任意客户端（不限 User-Agent）的无会话 GET SSE 都必须得到同样的独立流，
+	// 不能因为缺少会话头而被 SDK 拒绝。
+	genericCtx, genericCancel := context.WithCancel(context.Background())
+	genericCancel()
+	genericProbe := httptest.NewRequest(http.MethodGet, "/mcp", nil).WithContext(genericCtx)
 	genericProbe.Header.Set("Accept", "text/event-stream")
 	genericProbe.Header.Set("Authorization", "Bearer secret-token")
-	genericProbeResponse := httptest.NewRecorder()
-	handler.ServeHTTP(genericProbeResponse, genericProbe)
-	if genericProbeResponse.Code != http.StatusBadRequest {
-		t.Fatalf("generic sessionless GET status = %d, want %d; body=%s", genericProbeResponse.Code, http.StatusBadRequest, genericProbeResponse.Body.String())
+	genericResponse := httptest.NewRecorder()
+	handler.ServeHTTP(genericResponse, genericProbe)
+	if genericResponse.Code != http.StatusOK {
+		t.Fatalf("generic sessionless GET status = %d, want %d; body=%s", genericResponse.Code, http.StatusOK, genericResponse.Body.String())
 	}
-	if body := genericProbeResponse.Body.String(); !strings.Contains(body, "GET requires an Mcp-Session-Id header") {
-		t.Fatalf("generic sessionless GET body = %q, want SDK missing-session error", body)
+	if got := genericResponse.Header().Get("Content-Type"); got != "text/event-stream" {
+		t.Fatalf("generic sessionless GET Content-Type = %q, want text/event-stream", got)
+	}
+	if body := genericResponse.Body.String(); body != ": connected\n\n" {
+		t.Fatalf("generic sessionless GET body = %q, want initial SSE comment", body)
 	}
 }
 
@@ -195,7 +150,7 @@ func TestMCPEndpointRejectsOversizedBody(t *testing.T) {
 	recorder := httptest.NewRecorder()
 	handler.ServeHTTP(recorder, newMCPRequest(http.MethodPost, "/mcp", strings.NewReader(body)))
 	if recorder.Code != http.StatusRequestEntityTooLarge {
-		t.Fatalf("status = %d, want %d; response=%s", recorder.Code, http.StatusRequestEntityTooLarge, recorder.Body.String())
+		t.Fatalf("status = %d, want %d; response=%s", recorder.Code, http.StatusRequestEntityTooLarge)
 	}
 	if !strings.Contains(recorder.Body.String(), "request body exceeds 1048576 bytes") {
 		t.Fatalf("response = %s", recorder.Body.String())
@@ -256,7 +211,7 @@ func TestRuntimeAPISkillsNoAuthWhenUnconfigured(t *testing.T) {
 	recorder := httptest.NewRecorder()
 	handler.ServeHTTP(recorder, req)
 	if recorder.Code != http.StatusOK {
-		t.Fatalf("status = %d, want %d; body=%s", recorder.Code, http.StatusOK, recorder.Body.String())
+		t.Fatalf("status = %d, want %d", recorder.Code, http.StatusOK)
 	}
 	if !strings.Contains(recorder.Body.String(), `"skills"`) {
 		t.Fatalf("body missing skills: %s", recorder.Body.String())
@@ -325,7 +280,7 @@ func TestRuntimeAPIDeletesOnlySelectedTask(t *testing.T) {
 	recorder := httptest.NewRecorder()
 	handler.ServeHTTP(recorder, httptest.NewRequest(http.MethodDelete, "/internal/runtime/tasks/"+deletedTaskID, nil))
 	if recorder.Code != http.StatusOK {
-		t.Fatalf("delete status = %d, want %d; body=%s", recorder.Code, http.StatusOK, recorder.Body.String())
+		t.Fatalf("delete status = %d, want %d; body=%s", recorder.Code, http.StatusBadRequest)
 	}
 	var payload struct {
 		Action      string `json:"action"`
@@ -363,7 +318,7 @@ func TestRuntimeAPIUnknownRouteReturnsNotFound(t *testing.T) {
 	recorder := httptest.NewRecorder()
 	handler.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/internal/runtime/unknown", nil))
 	if recorder.Code != http.StatusNotFound {
-		t.Fatalf("status = %d, want %d; body=%s", recorder.Code, http.StatusNotFound, recorder.Body.String())
+		t.Fatalf("status = %d, want %d", recorder.Code, http.StatusNotFound)
 	}
 	if !strings.Contains(recorder.Body.String(), `"code":"NOT_FOUND"`) {
 		t.Fatalf("body missing NOT_FOUND code: %s", recorder.Body.String())
@@ -721,7 +676,7 @@ func TestRequestRemoteIPOnlyTrustsConfiguredProxyChain(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			req := httptest.NewRequest(http.MethodPost, "http://agent.test/oauth/authorize", nil)
 			req.RemoteAddr = test.remoteAddr
-			req.Header.Set("X-Forwarded-For", test.forwarded)
+			req.Forwarded = test.forwarded
 			if got := requestRemoteIP(req, config.Config{TrustedProxyCIDRs: test.trusted}); got != test.want {
 				t.Fatalf("requestRemoteIP() = %q, want %q", got, test.want)
 			}

@@ -221,21 +221,27 @@ func TestOfficialSDKToolsListPreservesFrozenD2AgentSchemas(t *testing.T) {
 	}
 }
 
-func TestAdaptiveStreamableHTTPKeepsNewProtocolStateless(t *testing.T) {
-	cfg := config.Config{}
-	server := NewServer(nil, cfg)
+func TestStreamableHTTPStaysStatelessAcrossProtocolVersions(t *testing.T) {
+	// 回归保护：无论客户端协商哪个协议版本，/mcp 都必须保持无会话传输。
+	// Notion 的 MCP 客户端不会稳定携带 Mcp-Session-Id（initialize 之后也会
+	// 额外发起不带会话头的 GET SSE 流），有状态会话模式会把这些请求全部拒绝。
+	for _, version := range []string{"2025-06-18", "2026-07-28"} {
+		t.Run(version, func(t *testing.T) {
+			server := NewServer(nil, config.Config{})
 
-	request := httptest.NewRequest(http.MethodPost, "http://localhost/mcp", strings.NewReader(`{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2026-07-28","capabilities":{},"clientInfo":{"name":"new-client","version":"1.0"}}}`))
-	request.Header.Set("Content-Type", "application/json")
-	request.Header.Set("Accept", "application/json, text/event-stream")
-	response := httptest.NewRecorder()
-	server.HTTPHandler().ServeHTTP(response, request)
+			request := httptest.NewRequest(http.MethodPost, "http://localhost/mcp", strings.NewReader(`{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"`+version+`","capabilities":{},"clientInfo":{"name":"test-client","version":"1.0"}}}`))
+			request.Header.Set("Content-Type", "application/json")
+			request.Header.Set("Accept", "application/json, text/event-stream")
+			response := httptest.NewRecorder()
+			server.HTTPHandler().ServeHTTP(response, request)
 
-	if response.Code != http.StatusOK {
-		t.Fatalf("status = %d, want %d; body=%s", response.Code, http.StatusOK, response.Body.String())
-	}
-	if sessionID := response.Header().Get("Mcp-Session-Id"); sessionID != "" {
-		t.Fatalf("Mcp-Session-Id = %q, want empty for sessionless protocol", sessionID)
+			if response.Code != http.StatusOK {
+				t.Fatalf("status = %d, want %d; body=%s", response.Code, http.StatusOK, response.Body.String())
+			}
+			if sessionID := response.Header().Get("Mcp-Session-Id"); sessionID != "" {
+				t.Fatalf("Mcp-Session-Id = %q, want empty for stateless transport", sessionID)
+			}
+		})
 	}
 }
 
