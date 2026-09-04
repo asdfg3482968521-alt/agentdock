@@ -40,6 +40,11 @@ func NewServer(runtime *app.Runtime, cfg config.Config) *Server {
 	)
 	if runtime != nil {
 		for _, name := range runtime.ToolNames() {
+			// AGENTDOCK_MCP_TOOLS_INCLUDE/EXCLUDE 可收敛对外工具目录：
+			// Notion 等客户端无法消化过大的 tools/list（见 tool_filter.go）。
+			if !mcpToolExposed(name) {
+				continue
+			}
 			server.registerTool(name, cfg)
 		}
 	}
