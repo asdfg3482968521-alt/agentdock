@@ -98,7 +98,7 @@ func TestResolveOAuthServerURLPrefersActiveServerURL(t *testing.T) {
 	if err := os.WriteFile(runtime.files.namedServerURL, []byte("https://named.example.com\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	origin, err := resolveOAuthServerURL(runtime)
+	origin, err := resolveOAuthServerURL(runtime, false)
 	if err != nil {
 		t.Fatalf("resolveOAuthServerURL() error = %v", err)
 	}
@@ -112,7 +112,7 @@ func TestResolveOAuthServerURLFallsBackToNamedServerURL(t *testing.T) {
 	if err := os.WriteFile(runtime.files.namedServerURL, []byte("https://named.example.com/mcp\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	origin, err := resolveOAuthServerURL(runtime)
+	origin, err := resolveOAuthServerURL(runtime, false)
 	if err != nil {
 		t.Fatalf("resolveOAuthServerURL() error = %v", err)
 	}
@@ -125,7 +125,7 @@ func TestResolveOAuthServerURLFailsFastWhenTunnelConfiguredWithoutURL(t *testing
 	for _, mode := range []string{"quick", "named"} {
 		t.Run(mode, func(t *testing.T) {
 			runtime := oauthURLTestRuntime(t, mode)
-			if _, err := resolveOAuthServerURL(runtime); err == nil {
+			if _, err := resolveOAuthServerURL(runtime, false); err == nil {
 				t.Fatal("resolveOAuthServerURL() should fail fast when a tunnel is configured but no public URL exists")
 			}
 		})
@@ -134,7 +134,7 @@ func TestResolveOAuthServerURLFailsFastWhenTunnelConfiguredWithoutURL(t *testing
 
 func TestResolveOAuthServerURLAllowsLocalOnlyWithoutTunnel(t *testing.T) {
 	runtime := oauthURLTestRuntime(t, "none")
-	origin, err := resolveOAuthServerURL(runtime)
+	origin, err := resolveOAuthServerURL(runtime, false)
 	if err != nil {
 		t.Fatalf("resolveOAuthServerURL() error = %v", err)
 	}
@@ -148,11 +148,32 @@ func TestResolveOAuthServerURLIgnoresStaleNamedURLWhenTunnelDisabled(t *testing.
 	if err := os.WriteFile(runtime.files.namedServerURL, []byte("https://named.example.com\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	origin, err := resolveOAuthServerURL(runtime)
+	origin, err := resolveOAuthServerURL(runtime, false)
 	if err != nil {
 		t.Fatalf("resolveOAuthServerURL() error = %v", err)
 	}
 	if origin != "" {
 		t.Fatalf("resolveOAuthServerURL() = %q, want empty when tunnel mode is none", origin)
+	}
+}
+
+func TestResolveOAuthServerURLForcedRejectsLocalOnlyWithoutURL(t *testing.T) {
+	runtime := oauthURLTestRuntime(t, "none")
+	if _, err := resolveOAuthServerURL(runtime, true); err == nil {
+		t.Fatal("resolveOAuthServerURL() with forced OAuth should fail when no public URL exists, even in local-only mode")
+	}
+}
+
+func TestResolveOAuthServerURLForcedKeepsConfiguredURL(t *testing.T) {
+	runtime := oauthURLTestRuntime(t, "none")
+	if err := os.WriteFile(runtime.files.serverURL, []byte("https://tunnel.example.com\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	origin, err := resolveOAuthServerURL(runtime, true)
+	if err != nil {
+		t.Fatalf("resolveOAuthServerURL() error = %v", err)
+	}
+	if origin != "https://tunnel.example.com" {
+		t.Fatalf("resolveOAuthServerURL() = %q, want configured origin", origin)
 	}
 }

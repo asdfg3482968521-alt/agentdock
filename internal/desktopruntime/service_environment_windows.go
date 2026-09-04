@@ -60,9 +60,11 @@ type controlPanelSettings struct {
 // 优先读取 server-url.txt；配置了 Tunnel（quick/named）时若该文件为空，
 // 回退到 named-server-url.txt 中的固定域名地址——Tunnel 重启/重新生成期间
 // server-url.txt 可能处于短暂的空窗。两者皆空时：
+//   - 强制 OAuth（forceOAuth，来自 AGENTDOCK_OAUTH_REQUIRED）：无论 Tunnel 模式如何
+//     都直接报错，覆盖使用 ngrok 等外部隧道（mode=none）但要求 OAuth 常开的场景；
 //   - 已配置 Tunnel：直接报错，拒绝静默降级为仅 Bearer（OAuth 消失事故根因）；
-//   - 未配置 Tunnel（none）：返回空字符串，保持本地仅 Bearer 的桌面默认行为。
-func resolveOAuthServerURL(runtime tunnelRuntime) (string, error) {
+//   - 未配置 Tunnel 且未强制（none）：返回空字符串，保持本地仅 Bearer 的桌面默认行为。
+func resolveOAuthServerURL(runtime tunnelRuntime, forceOAuth bool) (string, error) {
 	serverURL, err := readTrimmedText(runtime.files.serverURL)
 	if err != nil {
 		return "", err
@@ -74,12 +76,23 @@ func resolveOAuthServerURL(runtime tunnelRuntime) (string, error) {
 		}
 	}
 	if serverURL == "" {
+		if forceOAuth {
+			return "", fmt.Errorf("已启用强制 OAuth（AGENTDOCK_OAUTH_REQUIRED=true），但没有可用的公网地址（server-url.txt 与 named-server-url.txt 均为空），拒绝降级为仅 Bearer 启动；请先把公网地址写入运行时目录的 server-url.txt（例如 ngrok 地址 https://xxx.ngrok-free.dev），或用 agentdock tunnel configure 配置 Tunnel")
+		}
 		if runtime.mode != "none" {
 			return "", fmt.Errorf("已配置 Tunnel（%s）但没有可用的公网地址（server-url.txt 与 named-server-url.txt 均为空），拒绝降级为仅 Bearer 启动；请修复 Tunnel 或用 agentdock tunnel configure 重新设置公网地址", runtime.mode)
 		}
 		return "", nil
 	}
 	return normalizeHTTPSOrigin(serverURL)
+}
+
+// oauthForced 报告是否启用了强制 OAuth（AGENTDOCK_OAUTH_REQUIRED）。
+// 启用后任何 Tunnel 模式下都不允许静默降级为仅 Bearer 启动。
+func oauthForced() bool {
+	value := strings.TrimSpace(os.Getenv("AGENTDOCK_OAUTH_REQUIRED"))
+	parsed, err := strconv.ParseBool(value)
+	return err == nil && parsed
 }
 
 func platformPrepareCoreEnvironment(runtimeRoot string) error {
@@ -148,7 +161,7 @@ func platformPrepareCoreEnvironment(runtimeRoot string) error {
 	if err != nil {
 		return err
 	}
-	serverURL, err := resolveOAuthServerURL(tunnelState)
+	serverURL, err := resolveOAuthServerURL(tunnelState, oauthForced())
 	if err != nil {
 		return err
 	}
