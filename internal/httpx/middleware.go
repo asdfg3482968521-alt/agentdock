@@ -33,11 +33,26 @@ func (r *statusRecorder) Write(data []byte) (int, error) {
 	return n, err
 }
 
+type statusRecorderFlusher struct {
+	*statusRecorder
+}
+
+func (r *statusRecorderFlusher) Flush() {
+	if r.status == 0 {
+		r.WriteHeader(http.StatusOK)
+	}
+	r.ResponseWriter.(http.Flusher).Flush()
+}
+
 func loggingMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		started := time.Now()
 		recorder := &statusRecorder{ResponseWriter: w}
-		next.ServeHTTP(recorder, r)
+		var responseWriter http.ResponseWriter = recorder
+		if _, ok := w.(http.Flusher); ok {
+			responseWriter = &statusRecorderFlusher{statusRecorder: recorder}
+		}
+		next.ServeHTTP(responseWriter, r)
 		status := recorder.status
 		if status == 0 {
 			status = http.StatusOK
