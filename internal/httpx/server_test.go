@@ -76,7 +76,7 @@ func TestMCPEndpointAcceptsAuthenticatedStandaloneSSE(t *testing.T) {
 	if err != nil {
 		t.Fatalf("new runtime: %v", err)
 	}
-	handler := mcpEndpointHandler(mcp.NewServer(runtime, cfg), cfg, auth.NewOAuthStore())
+	handler := loggingMiddleware(mcpEndpointHandler(mcp.NewServer(runtime, cfg), cfg, auth.NewOAuthStore()))
 
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
