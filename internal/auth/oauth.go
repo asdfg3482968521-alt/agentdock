@@ -30,6 +30,9 @@ const (
 
 	oauthClientIdleTTL       = 180 * 24 * time.Hour
 	oauthClientTouchInterval = 24 * time.Hour
+
+	OAuthTokenEndpointAuthNone             = "none"
+	OAuthTokenEndpointAuthClientSecretPost = "client_secret_post"
 )
 
 type OAuthStore struct {
@@ -68,11 +71,13 @@ type OAuthGrant struct {
 }
 
 type OAuthClientRegistration struct {
-	ClientName   string   `json:"client_name,omitempty"`
-	RedirectURIs []string `json:"redirect_uris"`
-	GrantTypes   []string `json:"grant_types"`
-	IssuedAt     int64    `json:"issued_at"`
-	LastUsedAt   int64    `json:"last_used_at,omitempty"`
+	ClientName              string   `json:"client_name,omitempty"`
+	RedirectURIs            []string `json:"redirect_uris"`
+	GrantTypes              []string `json:"grant_types"`
+	TokenEndpointAuthMethod string   `json:"token_endpoint_auth_method,omitempty"`
+	ClientSecretHash        string   `json:"client_secret_hash,omitempty"`
+	IssuedAt                int64    `json:"issued_at"`
+	LastUsedAt              int64    `json:"last_used_at,omitempty"`
 }
 
 type oauthState struct {
@@ -351,31 +356,74 @@ func validStoredClient(clientID string, registration OAuthClientRegistration, no
 	if len(registration.ClientName) > 200 {
 		return false
 	}
+	switch normalizeOAuthClientAuthMethod(registration.TokenEndpointAuthMethod) {
+	case OAuthTokenEndpointAuthNone:
+		if registration.ClientSecretHash != "" {
+			return false
+		}
+	case OAuthTokenEndpointAuthClientSecretPost:
+		if !validOAuthClientSecretHash(registration.ClientSecretHash) {
+			return false
+		}
+	default:
+		return false
+	}
 	return len(uniqueNonEmptyStrings(registration.RedirectURIs)) == len(registration.RedirectURIs) &&
 		len(uniqueNonEmptyStrings(registration.GrantTypes)) == len(registration.GrantTypes)
 }
 
 func (s *OAuthStore) RegisterClient(clientName string, redirectURIs, grantTypes []string) (string, error) {
+	clientID, _, err := s.RegisterClientWithAuth(
+		clientName,
+		redirectURIs,
+		grantTypes,
+		OAuthTokenEndpointAuthNone,
+	)
+	return clientID, err
+}
+
+func (s *OAuthStore) RegisterClientWithAuth(
+	clientName string,
+	redirectURIs, grantTypes []string,
+	tokenEndpointAuthMethod string,
+) (string, string, error) {
 	now := time.Now()
+	authMethod := normalizeOAuthClientAuthMethod(tokenEndpointAuthMethod)
+	clientSecret := ""
+	clientSecretHash := ""
+	switch authMethod {
+	case OAuthTokenEndpointAuthNone:
+	case OAuthTokenEndpointAuthClientSecretPost:
+		var err error
+		clientSecret, err = RandomToken(32)
+		if err != nil {
+			return "", "", fmt.Errorf("generate OAuth client secret: %w", err)
+		}
+		clientSecretHash = hashOAuthClientSecret(clientSecret)
+	default:
+		return "", "", fmt.Errorf("unsupported OAuth token endpoint auth method %q", authMethod)
+	}
 	registration := OAuthClientRegistration{
-		ClientName:   strings.TrimSpace(clientName),
-		RedirectURIs: uniqueNonEmptyStrings(redirectURIs),
-		GrantTypes:   uniqueNonEmptyStrings(grantTypes),
-		IssuedAt:     now.Unix(),
-		LastUsedAt:   now.Unix(),
+		ClientName:              strings.TrimSpace(clientName),
+		RedirectURIs:            uniqueNonEmptyStrings(redirectURIs),
+		GrantTypes:              uniqueNonEmptyStrings(grantTypes),
+		TokenEndpointAuthMethod: authMethod,
+		ClientSecretHash:        clientSecretHash,
+		IssuedAt:                now.Unix(),
+		LastUsedAt:              now.Unix(),
 	}
 	if len(registration.RedirectURIs) == 0 {
-		return "", errors.New("at least one redirect URI is required")
+		return "", "", errors.New("at least one redirect URI is required")
 	}
 	if len(registration.GrantTypes) == 0 {
-		return "", errors.New("at least one grant type is required")
+		return "", "", errors.New("at least one grant type is required")
 	}
 	if len(registration.ClientName) > 200 {
-		return "", errors.New("client name exceeds 200 characters")
+		return "", "", errors.New("client name exceeds 200 characters")
 	}
 	randomValue, err := RandomToken(24)
 	if err != nil {
-		return "", fmt.Errorf("generate OAuth client ID: %w", err)
+		return "", "", fmt.Errorf("generate OAuth client ID: %w", err)
 	}
 	clientID := shortClientPrefix + randomValue
 
@@ -391,7 +439,7 @@ func (s *OAuthStore) RegisterClient(clientName string, redirectURIs, grantTypes 
 		s.grants = previousGrants
 		s.codes = previousCodes
 		s.accessIndex = previousAccessIndex
-		return "", fmt.Errorf("OAuth client limit %d reached", maxOAuthClients)
+		return "", "", fmt.Errorf("OAuth client limit %d reached", maxOAuthClients)
 	}
 	s.clients[clientID] = registration
 	if err := s.persistStateLocked(); err != nil {
@@ -399,9 +447,9 @@ func (s *OAuthStore) RegisterClient(clientName string, redirectURIs, grantTypes 
 		s.grants = previousGrants
 		s.codes = previousCodes
 		s.accessIndex = previousAccessIndex
-		return "", err
+		return "", "", err
 	}
-	return clientID, nil
+	return clientID, clientSecret, nil
 }
 
 func (s *OAuthStore) PruneExpiredClients(now time.Time) (int, error) {
@@ -492,7 +540,27 @@ func (s *OAuthStore) ClientAllowsGrant(clientID, grantType string) bool {
 }
 
 func (s *OAuthStore) ClientRegistration(clientID string) (OAuthClientRegistration, bool) {
-	return s.clientRegistration(clientID)
+	registration, ok := s.clientRegistration(clientID)
+	if !ok {
+		return OAuthClientRegistration{}, false
+	}
+	registration.TokenEndpointAuthMethod = normalizeOAuthClientAuthMethod(registration.TokenEndpointAuthMethod)
+	return registration, true
+}
+
+func (s *OAuthStore) ValidateClientSecret(clientID, clientSecret string) bool {
+	registration, ok := s.ClientRegistration(clientID)
+	if !ok {
+		return false
+	}
+	switch registration.TokenEndpointAuthMethod {
+	case OAuthTokenEndpointAuthNone:
+		return clientSecret == ""
+	case OAuthTokenEndpointAuthClientSecretPost:
+		return verifyOAuthClientSecret(registration.ClientSecretHash, clientSecret)
+	default:
+		return false
+	}
 }
 
 func (s *OAuthStore) clientRegistration(clientID string) (OAuthClientRegistration, bool) {
@@ -564,6 +632,38 @@ func cloneStringMap(input map[string]string) map[string]string {
 		cloned[key] = value
 	}
 	return cloned
+}
+
+func normalizeOAuthClientAuthMethod(method string) string {
+	method = strings.TrimSpace(method)
+	if method == "" {
+		return OAuthTokenEndpointAuthNone
+	}
+	return method
+}
+
+func hashOAuthClientSecret(secret string) string {
+	digest := sha256.Sum256([]byte(secret))
+	return base64.RawURLEncoding.EncodeToString(digest[:])
+}
+
+func validOAuthClientSecretHash(encoded string) bool {
+	encoded = strings.TrimSpace(encoded)
+	decoded, err := base64.RawURLEncoding.DecodeString(encoded)
+	return err == nil && len(decoded) == sha256.Size &&
+		base64.RawURLEncoding.EncodeToString(decoded) == encoded
+}
+
+func verifyOAuthClientSecret(encodedHash, secret string) bool {
+	if secret == "" || !validOAuthClientSecretHash(encodedHash) {
+		return false
+	}
+	digest := sha256.Sum256([]byte(secret))
+	expected, err := base64.RawURLEncoding.DecodeString(encodedHash)
+	if err != nil {
+		return false
+	}
+	return subtle.ConstantTimeCompare(expected, digest[:]) == 1
 }
 
 func VerifyPKCE(verifier, challenge string) bool {
@@ -694,7 +794,7 @@ func EquivalentResourceURI(left, right string) bool {
 
 func canonicalResourceURI(raw string) (string, bool) {
 	parsed, err := url.Parse(strings.TrimSpace(raw))
-	if err != nil || parsed.Scheme == "" || parsed.Host == "" || parsed.User != nil || parsed.Fragment != "" {
+	if err != nil || parsed.Scheme == "" || parsed.Host == "" || parsed.User != nil || parsed.Fragment != "" || parsed.Opaque != "" {
 		return "", false
 	}
 	parsed.Scheme = strings.ToLower(parsed.Scheme)

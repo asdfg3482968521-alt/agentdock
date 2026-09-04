@@ -77,22 +77,40 @@ type oauthClientStore struct {
 }
 
 func (s oauthClientStore) GetByID(_ context.Context, clientID string) (gooauth2.ClientInfo, error) {
-	_, ok := s.store.ClientRegistration(clientID)
+	registration, ok := s.store.ClientRegistration(clientID)
 	if !ok {
 		return nil, oautherrors.ErrInvalidClient
 	}
-	return oauthClient{id: strings.TrimSpace(clientID)}, nil
+	return oauthClient{
+		id:         strings.TrimSpace(clientID),
+		authMethod: registration.TokenEndpointAuthMethod,
+		secretHash: registration.ClientSecretHash,
+	}, nil
 }
 
 type oauthClient struct {
-	id string
+	id         string
+	authMethod string
+	secretHash string
 }
 
 func (c oauthClient) GetID() string     { return c.id }
 func (c oauthClient) GetSecret() string { return "" }
 func (c oauthClient) GetDomain() string { return c.id }
-func (c oauthClient) IsPublic() bool    { return true }
+func (c oauthClient) IsPublic() bool {
+	return normalizeOAuthClientAuthMethod(c.authMethod) == OAuthTokenEndpointAuthNone
+}
 func (c oauthClient) GetUserID() string { return "" }
+func (c oauthClient) VerifyPassword(secret string) bool {
+	switch normalizeOAuthClientAuthMethod(c.authMethod) {
+	case OAuthTokenEndpointAuthNone:
+		return secret == ""
+	case OAuthTokenEndpointAuthClientSecretPost:
+		return verifyOAuthClientSecret(c.secretHash, secret)
+	default:
+		return false
+	}
+}
 
 type oauthAuthorizeGenerator struct{}
 
@@ -147,5 +165,6 @@ func (g oauthAccessGenerator) Token(_ context.Context, data *gooauth2.GenerateBa
 }
 
 var _ gooauth2.ClientStore = oauthClientStore{}
+var _ gooauth2.ClientPasswordVerifier = oauthClient{}
 var _ gooauth2.AuthorizeGenerate = oauthAuthorizeGenerator{}
 var _ gooauth2.AccessGenerate = oauthAccessGenerator{}
