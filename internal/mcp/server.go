@@ -213,3 +213,176 @@ func (s *Server) callTool(ctx context.Context, name string, request *mcpsdk.Call
 	slog.Info("tool finished", finishedAttrs...)
 
 	encoded, encodeErr := json.Marshal(toolEnvelope(name, result, err))
+	if encodeErr != nil {
+		return nil, fmt.Errorf("encode MCP tool result: %w", encodeErr)
+	}
+	var response mcpsdk.CallToolResult
+	if decodeErr := json.Unmarshal(encoded, &response); decodeErr != nil {
+		return nil, fmt.Errorf("decode MCP tool result: %w", decodeErr)
+	}
+	return &response, nil
+}
+
+func (s *Server) invokeTool(ctx context.Context, name string, arguments map[string]any, requestID, plane string) (result app.Result, err error) {
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			slog.Error("tool panic contained", "request_id", requestID, "server_instance", s.instanceID, "tool", name, "plane", plane, "panic", recovered)
+			err = &app.ToolError{
+				Code: "MCP_TOOL_PANIC", Message: "tool request failed unexpectedly", Category: "runtime", Retryable: false,
+				Details: map[string]any{"tool": name, "plane": plane},
+			}
+		}
+	}()
+	if s == nil || s.runtime == nil {
+		return nil, &app.ToolError{
+			Code: "MCP_RUNTIME_UNAVAILABLE", Message: "AgentDock runtime is unavailable", Category: "runtime", Retryable: true,
+			Details: map[string]any{"tool": name, "plane": plane},
+		}
+	}
+	return s.runtime.Call(ctx, name, arguments)
+}
+
+func toolRequestPlane(name string) string {
+	switch name {
+	case "server_info", "agentdock_context", "mcp_manage", "mcp_tool_search", "mcp_tool_inspect":
+		return "CONTROL_PLANE"
+	default:
+		return "EXECUTION_PLANE"
+	}
+}
+
+func toolMetadata(def ToolDefinition) map[string]any {
+	meta := map[string]any{}
+	if len(def.FileArgRewritePaths) > 0 {
+		paths := append([]string(nil), def.FileArgRewritePaths...)
+		meta["file_arg_rewrite_paths"] = paths
+		meta["openai/fileParams"] = paths
+	}
+	if len(def.FileResultRewritePaths) > 0 {
+		paths := append([]string(nil), def.FileResultRewritePaths...)
+		meta["file_result_rewrite_paths"] = paths
+		meta["openai/fileResultPaths"] = paths
+		meta["openai/fileOutputs"] = paths
+	}
+	return meta
+}
+
+func cloneBoolPointer(value *bool) *bool {
+	if value == nil {
+		return nil
+	}
+	cloned := *value
+	return &cloned
+}
+
+type readCloser struct{ io.Reader }
+
+func (readCloser) Close() error { return nil }
+
+type writeCloser struct{ io.Writer }
+
+func (writeCloser) Close() error { return nil }
+
+func toolDescriptorsForNames(names []string) []map[string]any {
+	descriptors := make([]map[string]any, 0, len(names))
+	for _, name := range names {
+		def, _ := toolDefinition(name)
+		descriptor := map[string]any{
+			"name":         name,
+			"title":        def.Title,
+			"description":  def.Description,
+			"inputSchema":  inputSchema(name),
+			"outputSchema": outputSchema(name),
+		}
+		meta := toolMetadata(def)
+		if paths, ok := meta["file_arg_rewrite_paths"].([]string); ok {
+			descriptor["file_arg_rewrite_paths"] = paths
+		}
+		if paths, ok := meta["file_result_rewrite_paths"].([]string); ok {
+			descriptor["file_result_rewrite_paths"] = paths
+		}
+		if len(meta) > 0 {
+			descriptor["_meta"] = meta
+		}
+		descriptors = append(descriptors, descriptor)
+	}
+	return descriptors
+}
+
+func toolEnvelope(name string, structured any, err error) map[string]any {
+	if err != nil {
+		payload := map[string]any{"tool": name, "error": err.Error()}
+		var toolErr *app.ToolError
+		if errors.As(err, &toolErr) {
+			payload["code"] = toolErr.Code
+			payload["category"] = toolErr.Category
+			payload["retryable"] = toolErr.Retryable
+			payload["details"] = toolErr.Details
+			if toolErr.Code == "PERMISSION_REQUIRED" {
+				payload["permission_request"] = map[string]any{
+					"tool_name":  name,
+					"permission": toolErr.Details["permission"],
+					"status":     "required",
+				}
+			}
+		}
+		return map[string]any{"isError": true, "structuredContent": payload, "content": []map[string]any{{"type": "text", "text": pretty(payload)}}}
+	}
+	if name == "view_image" {
+		payload := asMap(structured)
+		if data, _ := payload["_mcp_image_base64"].(string); data != "" {
+			mimeType, _ := payload["_mcp_image_mime_type"].(string)
+			clean := cloneWithoutInternalImage(payload)
+			return map[string]any{"isError": false, "structuredContent": clean, "content": []map[string]any{{"type": "image", "data": data, "mimeType": mimeType}}}
+		}
+	}
+	if name == "mcp_tool_call" || strings.HasPrefix(name, "opencode_") {
+		return dynamicMCPToolEnvelope(structured)
+	}
+	return map[string]any{"isError": false, "structuredContent": structured, "content": []map[string]any{{"type": "text", "text": pretty(structured)}}}
+}
+
+func dynamicMCPToolEnvelope(structured any) map[string]any {
+	payload := asMap(structured)
+	remote, _ := payload["result"].(map[string]any)
+	isError, _ := remote["isError"].(bool)
+	content, ok := remote["content"]
+	if !ok {
+		content = []map[string]any{{"type": "text", "text": pretty(payload)}}
+	}
+	return map[string]any{
+		"isError":           isError,
+		"structuredContent": payload,
+		"content":           content,
+	}
+}
+
+func cloneWithoutInternalImage(value map[string]any) map[string]any {
+	clean := make(map[string]any, len(value))
+	for key, item := range value {
+		if key == "_mcp_image_base64" || key == "_mcp_image_mime_type" {
+			continue
+		}
+		clean[key] = item
+	}
+	return clean
+}
+
+func asMap(value any) map[string]any {
+	switch typed := value.(type) {
+	case map[string]any:
+		return typed
+	case app.Result:
+		return map[string]any(typed)
+	default:
+		return map[string]any{}
+	}
+}
+
+func pretty(value any) string {
+	data, err := json.MarshalIndent(value, "", "  ")
+	if err != nil {
+		return fmt.Sprint(value)
+	}
+	return string(data)
+}
