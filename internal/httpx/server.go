@@ -76,6 +76,7 @@ func Serve(ctx context.Context, server *mcp.Server, cfg config.Config) error {
 
 	addr := fmt.Sprintf("%s:%d", cfg.Host, cfg.Port)
 	httpServer := newHTTPServer(addr, loggingMiddleware(mux))
+	httpServer.BaseContext = func(net.Listener) context.Context { return ctx }
 	slog.Info("http server listening", "addr", addr)
 	return serveHTTP(ctx, httpServer)
 }
@@ -110,20 +111,10 @@ func registerOAuthRoutes(mux *http.ServeMux, cfg config.Config, store *auth.OAut
 		return
 	}
 	mux.HandleFunc("/.well-known/oauth-authorization-server", func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodGet {
-			w.Header().Set("Allow", http.MethodGet)
-			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-			return
-		}
-		writeJSON(w, oauthMetadata(cfg, r))
+		writeOAuthMetadata(w, r, oauthMetadata(cfg, r))
 	})
 	mux.HandleFunc("/.well-known/oauth-protected-resource/mcp", func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodGet {
-			w.Header().Set("Allow", http.MethodGet)
-			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-			return
-		}
-		writeJSON(w, protectedResourceMetadata(cfg, r))
+		writeOAuthMetadata(w, r, protectedResourceMetadata(cfg, r))
 	})
 	registrationLimiter := newFixedWindowLimiter(30, time.Minute)
 	passwordLimiter := newFixedWindowLimiter(10, 5*time.Minute)
@@ -146,6 +137,20 @@ func registerOAuthRoutes(mux *http.ServeMux, cfg config.Config, store *auth.OAut
 	mux.HandleFunc("/oauth/token", func(w http.ResponseWriter, r *http.Request) {
 		handleToken(w, r, cfg, store)
 	})
+}
+
+func writeOAuthMetadata(w http.ResponseWriter, r *http.Request, metadata map[string]any) {
+	if r.Method != http.MethodGet && r.Method != http.MethodHead {
+		w.Header().Set("Allow", http.MethodGet+", "+http.MethodHead)
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if r.Method == http.MethodHead {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		return
+	}
+	writeJSON(w, metadata)
 }
 
 type fixedWindowLimiter struct {
@@ -300,11 +305,58 @@ func mcpEndpointHandler(server *mcp.Server, cfg config.Config, oauthStore *auth.
 			http.Error(w, "unauthorized", http.StatusUnauthorized)
 			return
 		}
+		if r.Method == http.MethodGet && acceptsEventStream(r.Header.Values("Accept")) {
+			serveMCPStandaloneSSE(w, r)
+			return
+		}
 		if r.Method == http.MethodPost && !prepareMCPRequestBody(w, r) {
 			return
 		}
 		ctx := requestmeta.WithBaseURL(r.Context(), requestPublicBaseURL(cfg, r))
 		transport.ServeHTTP(w, r.WithContext(ctx))
+	}
+}
+
+func acceptsEventStream(values []string) bool {
+	for _, value := range values {
+		for _, candidate := range strings.Split(value, ",") {
+			mediaType, _, err := mime.ParseMediaType(strings.TrimSpace(candidate))
+			if err == nil && strings.EqualFold(mediaType, "text/event-stream") {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func serveMCPStandaloneSSE(w http.ResponseWriter, r *http.Request) {
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		http.Error(w, "streaming unsupported", http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("Connection", "keep-alive")
+	w.Header().Set("X-Accel-Buffering", "no")
+	w.WriteHeader(http.StatusOK)
+	if _, err := io.WriteString(w, ": connected\n\n"); err != nil {
+		return
+	}
+	flusher.Flush()
+
+	ticker := time.NewTicker(15 * time.Second)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-r.Context().Done():
+			return
+		case <-ticker.C:
+			if _, err := io.WriteString(w, ": keepalive\n\n"); err != nil {
+				return
+			}
+			flusher.Flush()
+		}
 	}
 }
 
@@ -401,7 +453,12 @@ func handleRegister(w http.ResponseWriter, r *http.Request, cfg config.Config, s
 		writeJSONStatus(w, http.StatusBadRequest, map[string]any{"error": errorCode, "error_description": description})
 		return
 	}
-	clientID, err := store.RegisterClient(metadata.ClientName, metadata.RedirectURIs, metadata.GrantTypes)
+	clientID, clientSecret, err := store.RegisterClientWithAuth(
+		metadata.ClientName,
+		metadata.RedirectURIs,
+		metadata.GrantTypes,
+		metadata.TokenEndpointAuthMethod,
+	)
 	if err != nil {
 		writeJSONStatus(w, http.StatusInternalServerError, map[string]any{"error": "server_error"})
 		return
@@ -410,9 +467,13 @@ func handleRegister(w http.ResponseWriter, r *http.Request, cfg config.Config, s
 		"client_id":                  clientID,
 		"client_id_issued_at":        time.Now().Unix(),
 		"redirect_uris":              metadata.RedirectURIs,
-		"token_endpoint_auth_method": "none",
+		"token_endpoint_auth_method": metadata.TokenEndpointAuthMethod,
 		"grant_types":                metadata.GrantTypes,
 		"response_types":             metadata.ResponseTypes,
+	}
+	if clientSecret != "" {
+		response["client_secret"] = clientSecret
+		response["client_secret_expires_at"] = 0
 	}
 	if metadata.ClientName != "" {
 		response["client_name"] = metadata.ClientName
@@ -448,7 +509,8 @@ func decodeClientRegistration(w http.ResponseWriter, r *http.Request) (clientReg
 		return metadata, errors.New("client_name exceeds 200 characters")
 	}
 	method := strings.TrimSpace(metadata.TokenEndpointAuthMethod)
-	if method != "none" {
+	if method != auth.OAuthTokenEndpointAuthNone &&
+		method != auth.OAuthTokenEndpointAuthClientSecretPost {
 		return metadata, fmt.Errorf("token_endpoint_auth_method %q is not supported", method)
 	}
 	if len(metadata.RedirectURIs) == 0 || len(metadata.RedirectURIs) > 10 {
@@ -489,7 +551,7 @@ func decodeClientRegistration(w http.ResponseWriter, r *http.Request) (clientReg
 		return metadata, err
 	}
 	metadata.RedirectURIs = redirectURIs
-	metadata.TokenEndpointAuthMethod = "none"
+	metadata.TokenEndpointAuthMethod = method
 	metadata.GrantTypes = grantTypes
 	metadata.ResponseTypes = responseTypes
 	return metadata, nil
@@ -595,7 +657,10 @@ func oauthMetadata(cfg config.Config, r *http.Request) map[string]any {
 		"response_types_supported":              []string{"code"},
 		"grant_types_supported":                 []string{"authorization_code", "refresh_token"},
 		"code_challenge_methods_supported":      []string{"S256"},
-		"token_endpoint_auth_methods_supported": []string{"none"},
+		"token_endpoint_auth_methods_supported": []string{
+			auth.OAuthTokenEndpointAuthNone,
+			auth.OAuthTokenEndpointAuthClientSecretPost,
+		},
 		"resource_indicators_supported":         true,
 	}
 }
@@ -925,12 +990,25 @@ func clientAuthenticationFailureReason(r *http.Request, grantType string, store 
 	if err := r.ParseForm(); err != nil {
 		return "form_parse_failed"
 	}
-	if len(r.PostForm["client_secret"]) != 0 {
-		return "client_secret_present"
-	}
 	clientID := strings.TrimSpace(r.PostForm.Get("client_id"))
-	if !store.ValidateClientID(clientID) {
+	registration, ok := store.ClientRegistration(clientID)
+	if !ok {
 		return "client_id_unregistered"
+	}
+	switch registration.TokenEndpointAuthMethod {
+	case auth.OAuthTokenEndpointAuthNone:
+		if len(r.PostForm["client_secret"]) != 0 {
+			return "client_secret_present"
+		}
+	case auth.OAuthTokenEndpointAuthClientSecretPost:
+		if len(r.PostForm["client_secret"]) != 1 || r.PostForm.Get("client_secret") == "" {
+			return "client_secret_missing"
+		}
+		if !store.ValidateClientSecret(clientID, r.PostForm.Get("client_secret")) {
+			return "client_secret_invalid"
+		}
+	default:
+		return "client_auth_method_unsupported"
 	}
 	if !store.ClientAllowsGrant(clientID, grantType) {
 		return "grant_not_allowed"
