@@ -158,14 +158,14 @@ func readSecretFile(path string) (string, error) {
 	}
 	info, err := os.Stat(path)
 	if err != nil {
-		return fmt.Errorf("读取临时凭据文件失败: %w", err)
+		return "", fmt.Errorf("读取临时凭据文件失败: %w", err)
 	}
 	if !info.Mode().IsRegular() || info.Size() > 64*1024 {
 		return "", errors.New("临时凭据文件无效")
 	}
 	data, err := os.ReadFile(path)
 	if err != nil {
-		return fmt.Errorf("读取临时凭据文件失败: %w", err)
+		return "", fmt.Errorf("读取临时凭据文件失败: %w", err)
 	}
 	value := strings.TrimSpace(string(data))
 	if value == "" {
