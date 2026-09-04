@@ -150,7 +150,7 @@ func TestMCPEndpointRejectsOversizedBody(t *testing.T) {
 	recorder := httptest.NewRecorder()
 	handler.ServeHTTP(recorder, newMCPRequest(http.MethodPost, "/mcp", strings.NewReader(body)))
 	if recorder.Code != http.StatusRequestEntityTooLarge {
-		t.Fatalf("status = %d, want %d; response=%s", recorder.Code, http.StatusRequestEntityTooLarge)
+		t.Fatalf("status = %d, want %d; response=%s", recorder.Code, http.StatusRequestEntityTooLarge, recorder.Body.String())
 	}
 	if !strings.Contains(recorder.Body.String(), "request body exceeds 1048576 bytes") {
 		t.Fatalf("response = %s", recorder.Body.String())
@@ -280,7 +280,7 @@ func TestRuntimeAPIDeletesOnlySelectedTask(t *testing.T) {
 	recorder := httptest.NewRecorder()
 	handler.ServeHTTP(recorder, httptest.NewRequest(http.MethodDelete, "/internal/runtime/tasks/"+deletedTaskID, nil))
 	if recorder.Code != http.StatusOK {
-		t.Fatalf("delete status = %d, want %d; body=%s", recorder.Code, http.StatusBadRequest)
+		t.Fatalf("delete status = %d, want %d; body=%s", recorder.Code, http.StatusOK, recorder.Body.String())
 	}
 	var payload struct {
 		Action      string `json:"action"`
@@ -676,7 +676,7 @@ func TestRequestRemoteIPOnlyTrustsConfiguredProxyChain(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			req := httptest.NewRequest(http.MethodPost, "http://agent.test/oauth/authorize", nil)
 			req.RemoteAddr = test.remoteAddr
-			req.Forwarded = test.forwarded
+			req.Header.Set("X-Forwarded-For", test.forwarded)
 			if got := requestRemoteIP(req, config.Config{TrustedProxyCIDRs: test.trusted}); got != test.want {
 				t.Fatalf("requestRemoteIP() = %q, want %q", got, test.want)
 			}
