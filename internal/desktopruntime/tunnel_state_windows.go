@@ -112,6 +112,16 @@ func clearActivePublicURL(files tunnelFiles) error {
 	return nil
 }
 
+// clearQuickReadyMarker 只摘除 Quick Tunnel 的 ready 标记文件。
+// server-url.txt 中的旧 OAuth Origin 必须保留到 finalizeQuickTunnel 原子写入新地址，
+// 否则核心在重启窗口会静默降级为仅 Bearer（OAuth 消失事故根因）。
+func clearQuickReadyMarker(files tunnelFiles) error {
+	if err := os.Remove(files.quickURL); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("删除 Quick Tunnel ready 文件失败: %w", err)
+	}
+	return nil
+}
+
 func preserveNamedServerURL(runtime tunnelRuntime) error {
 	if runtime.mode != "named" {
 		return nil
@@ -148,14 +158,14 @@ func readSecretFile(path string) (string, error) {
 	}
 	info, err := os.Stat(path)
 	if err != nil {
-		return "", fmt.Errorf("读取临时凭据文件失败: %w", err)
+		return fmt.Errorf("读取临时凭据文件失败: %w", err)
 	}
 	if !info.Mode().IsRegular() || info.Size() > 64*1024 {
 		return "", errors.New("临时凭据文件无效")
 	}
 	data, err := os.ReadFile(path)
 	if err != nil {
-		return "", fmt.Errorf("读取临时凭据文件失败: %w", err)
+		return fmt.Errorf("读取临时凭据文件失败: %w", err)
 	}
 	value := strings.TrimSpace(string(data))
 	if value == "" {

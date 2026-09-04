@@ -55,6 +55,33 @@ type controlPanelSettings struct {
 	ACPArgs                 []string `json:"acp_args"`
 }
 
+// resolveOAuthServerURL 解析核心启动时应使用的公网 OAuth Origin。
+//
+// 优先读取 server-url.txt；配置了 Tunnel（quick/named）时若该文件为空，
+// 回退到 named-server-url.txt 中的固定域名地址——Tunnel 重启/重新生成期间
+// server-url.txt 可能处于短暂的空窗。两者皆空时：
+//   - 已配置 Tunnel：直接报错，拒绝静默降级为仅 Bearer（OAuth 消失事故根因）；
+//   - 未配置 Tunnel（none）：返回空字符串，保持本地仅 Bearer 的桌面默认行为。
+func resolveOAuthServerURL(runtime tunnelRuntime) (string, error) {
+	serverURL, err := readTrimmedText(runtime.files.serverURL)
+	if err != nil {
+		return "", err
+	}
+	if serverURL == "" && runtime.mode != "none" {
+		serverURL, err = readTrimmedText(runtime.files.namedServerURL)
+		if err != nil {
+			return "", err
+		}
+	}
+	if serverURL == "" {
+		if runtime.mode != "none" {
+			return "", fmt.Errorf("已配置 Tunnel（%s）但没有可用的公网地址（server-url.txt 与 named-server-url.txt 均为空），拒绝降级为仅 Bearer 启动；请修复 Tunnel 或用 agentdock tunnel configure 重新设置公网地址", runtime.mode)
+		}
+		return "", nil
+	}
+	return normalizeHTTPSOrigin(serverURL)
+}
+
 func platformPrepareCoreEnvironment(runtimeRoot string) error {
 	manifest, root, err := loadDesktopManifest(runtimeRoot)
 	if err != nil {
@@ -117,15 +144,16 @@ func platformPrepareCoreEnvironment(runtimeRoot string) error {
 		managed["AGENTDOCK_ACP_ARGS_JSON"] = string(argsJSON)
 	}
 
-	serverURL, err := readTrimmedText(filepath.Join(root, "server-url.txt"))
+	tunnelState, err := loadTunnelRuntime(runtimeRoot)
+	if err != nil {
+		return err
+	}
+	serverURL, err := resolveOAuthServerURL(tunnelState)
 	if err != nil {
 		return err
 	}
 	if serverURL != "" {
-		serverURL, err = normalizeHTTPSOrigin(serverURL)
-		if err != nil {
-			return err
-		}
+		// 写回 server-url.txt：既是规范化，也能在回退到 named-server-url.txt 时完成自愈。
 		if err := writeRuntimeText(filepath.Join(root, "server-url.txt"), serverURL); err != nil {
 			return err
 		}

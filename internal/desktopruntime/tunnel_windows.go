@@ -109,8 +109,9 @@ func startTunnel(ctx context.Context, runtime tunnelRuntime) error {
 	}
 
 	if runtime.mode == "quick" {
-		// 旧临时地址在新进程真正拿到 URL 前不能继续暴露为 ready。
-		if err := clearActivePublicURL(runtime.files); err != nil {
+		// 旧临时地址在新进程真正拿到 URL 前不能继续暴露为 ready；
+		// 只摘除 ready 标记，server-url.txt 中的旧 OAuth Origin 保留到新地址原子写入。
+		if err := clearQuickReadyMarker(runtime.files); err != nil {
 			return err
 		}
 		if err := runtime.updateManifest("none", ""); err != nil {
@@ -140,13 +141,14 @@ func regenerateQuickTunnel(ctx context.Context, runtime tunnelRuntime) error {
 	if err := stopTunnel(ctx, runtime); err != nil {
 		return err
 	}
-	if err := clearActivePublicURL(runtime.files); err != nil {
+	if err := clearQuickReadyMarker(runtime.files); err != nil {
 		return err
 	}
 	if err := runtime.updateManifest("none", ""); err != nil {
 		return err
 	}
-	// 清掉旧公网地址后先重启核心，避免新地址准备期间继续使用失效的 OAuth Origin。
+	// 新地址就绪前核心继续以 server-url.txt 中的旧 OAuth Origin 运行；
+	// finalizeQuickTunnel 拿到新地址后会原子覆盖并再次重启核心，全程不再出现无 OAuth 窗口。
 	if err := platformServiceAction(ctx, runtime.root, "restart"); err != nil {
 		return err
 	}
