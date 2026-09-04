@@ -305,10 +305,6 @@ func mcpEndpointHandler(server *mcp.Server, cfg config.Config, oauthStore *auth.
 			http.Error(w, "unauthorized", http.StatusUnauthorized)
 			return
 		}
-		if r.Method == http.MethodGet && acceptsEventStream(r.Header.Values("Accept")) {
-			serveMCPStandaloneSSE(w, r)
-			return
-		}
 		if r.Method == http.MethodPost && !prepareMCPRequestBody(w, r) {
 			return
 		}
