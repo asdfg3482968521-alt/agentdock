@@ -126,21 +126,31 @@ func TestMCPEndpointAcceptsAuthenticatedStandaloneSSE(t *testing.T) {
 		t.Fatalf("body = %q, want SDK standalone SSE priming comment", body)
 	}
 
-	// Notion opens an additional standalone SSE GET without the session header.
-	// Treat that optional probe as unsupported instead of surfacing the SDK's
-	// 400 "GET requires an Mcp-Session-Id" error, while keeping the real
-	// session-bound SSE stream above on the SDK transport.
+	// Notion opens an additional standalone SSE GET without the session header
+	// even after the real session-bound SSE stream is active. Return a short
+	// compatibility probe with the SDK's priming comment, then end the response
+	// immediately so this extra stream cannot collide with the real MCP session
+	// or hang long enough to trigger a proxy timeout.
 	notionProbe := httptest.NewRequest(http.MethodGet, "/mcp", nil)
 	notionProbe.Header.Set("Accept", "text/event-stream")
 	notionProbe.Header.Set("Authorization", "Bearer secret-token")
 	notionProbe.Header.Set("User-Agent", "Notion-MCP-Client/1.0")
 	notionProbeResponse := httptest.NewRecorder()
 	handler.ServeHTTP(notionProbeResponse, notionProbe)
-	if notionProbeResponse.Code != http.StatusMethodNotAllowed {
-		t.Fatalf("Notion sessionless GET status = %d, want %d; body=%s", notionProbeResponse.Code, http.StatusMethodNotAllowed, notionProbeResponse.Body.String())
+	if notionProbeResponse.Code != http.StatusOK {
+		t.Fatalf("Notion sessionless GET status = %d, want %d; body=%s", notionProbeResponse.Code, http.StatusOK, notionProbeResponse.Body.String())
 	}
-	if got := notionProbeResponse.Header().Get("Allow"); got != "POST" {
-		t.Fatalf("Notion sessionless GET Allow = %q, want POST", got)
+	if got := notionProbeResponse.Header().Get("Content-Type"); got != "text/event-stream" {
+		t.Fatalf("Notion sessionless GET Content-Type = %q, want text/event-stream", got)
+	}
+	if got := notionProbeResponse.Header().Get("Cache-Control"); got != "no-cache, no-transform" {
+		t.Fatalf("Notion sessionless GET Cache-Control = %q, want no-cache, no-transform", got)
+	}
+	if !notionProbeResponse.Flushed {
+		t.Fatal("Notion sessionless GET response was not flushed")
+	}
+	if body := notionProbeResponse.Body.String(); body != ": ok\n\n" {
+		t.Fatalf("Notion sessionless GET body = %q, want short SSE priming comment", body)
 	}
 
 	genericProbe := httptest.NewRequest(http.MethodGet, "/mcp", nil)
