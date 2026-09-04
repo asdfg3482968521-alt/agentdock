@@ -13,10 +13,17 @@ $ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'
 
 $resolvedExpected = Resolve-Path -LiteralPath $ExpectedInstallerPath
+$downloadHeaders = @{}
+if (-not [string]::IsNullOrWhiteSpace($env:GH_TOKEN)) {
+    $downloadHeaders['Authorization'] = "Bearer $env:GH_TOKEN"
+}
+if ($Url -like 'https://api.github.com/*') {
+    $downloadHeaders['Accept'] = 'application/vnd.github.raw'
+}
 $downloaded = $false
 for ($attempt = 1; $attempt -le 10; $attempt++) {
     try {
-        Invoke-WebRequest -UseBasicParsing -Uri $Url -OutFile $OutputPath
+        Invoke-WebRequest -UseBasicParsing -Uri $Url -Headers $downloadHeaders -OutFile $OutputPath
         $downloaded = $true
         break
     } catch {

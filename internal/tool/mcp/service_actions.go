@@ -36,6 +36,7 @@ func (s *Service) Manage(ctx context.Context, args map[string]any) (Result, erro
 			Enabled:     boolArg(args, "enabled", true),
 			TimeoutMS:   intArg(args, "timeout_ms", 30000),
 		}
+		cfg = applyKnownServerDefaults(cfg)
 		server, err := s.mcpClients.Add(cfg)
 		if err != nil {
 			return nil, dynamicMCPToolError(err)
