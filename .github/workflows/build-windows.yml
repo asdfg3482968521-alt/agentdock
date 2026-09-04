@@ -1,3 +1,6 @@
+# Lightweight fast-path build: compiles agentdock.exe (windows/amd64, CGO
+# disabled) and uploads it as the agentdock-windows-amd64-exe artifact on
+# every push to main that touches Go sources or this workflow file.
 name: Build Windows EXE
 
 on:
