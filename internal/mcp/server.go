@@ -22,6 +22,7 @@ import (
 type Server struct {
 	runtime     *app.Runtime
 	sdk         *mcpsdk.Server
+	sdkNotion   *mcpsdk.Server // 配置了过滤环境变量时为 Notion 客户端单独构建的小目录实例；未配置时为 nil，所有客户端共用完整目录
 	httpHandler http.Handler
 	instanceID  string
 	requestSeq  atomic.Uint64
@@ -29,27 +30,35 @@ type Server struct {
 
 func NewServer(runtime *app.Runtime, cfg config.Config) *Server {
 	server := &Server{runtime: runtime, instanceID: fmt.Sprintf("%x", time.Now().UnixNano())}
-	serverOptions := &mcpsdk.ServerOptions{Capabilities: &mcpsdk.ServerCapabilities{}}
-	if cfg.Instructions != "" {
-		// 可选说明文字随 initialize 响应下发，由支持 MCP instructions 的客户端注入模型上下文。
-		serverOptions.Instructions = cfg.Instructions
+	newServerOptions := func() *mcpsdk.ServerOptions {
+		options := &mcpsdk.ServerOptions{Capabilities: &mcpsdk.ServerCapabilities{}}
+		if cfg.Instructions != "" {
+			// 可选说明文字随 initialize 响应下发，由支持 MCP instructions 的客户端注入模型上下文。
+			options.Instructions = cfg.Instructions
+		}
+		return options
 	}
-	server.sdk = mcpsdk.NewServer(
-		&mcpsdk.Implementation{Name: config.ServerName, Version: buildinfo.Version},
-		serverOptions,
-	)
+	implementation := &mcpsdk.Implementation{Name: config.ServerName, Version: buildinfo.Version}
+	server.sdk = mcpsdk.NewServer(implementation, newServerOptions())
 	if runtime != nil {
 		for _, name := range runtime.ToolNames() {
-			// AGENTDOCK_MCP_TOOLS_INCLUDE/EXCLUDE 可收敛对外工具目录：
-			// Notion 等客户端无法消化过大的 tools/list（见 tool_filter.go）。
-			if !mcpToolExposed(name) {
-				continue
+			server.registerTool(server.sdk, name, cfg)
+		}
+		// AGENTDOCK_MCP_TOOLS_INCLUDE/EXCLUDE 只对 Notion 客户端生效：
+		// 为它单独注册过滤后的小目录，其余 MCP 客户端始终拿到完整目录。
+		// Notion 无法消化过大的 tools/list（见 tool_filter.go）。
+		if notionToolFilterConfigured() {
+			server.sdkNotion = mcpsdk.NewServer(implementation, newServerOptions())
+			for _, name := range runtime.ToolNames() {
+				if !mcpToolExposed(name) {
+					continue
+				}
+				server.registerTool(server.sdkNotion, name, cfg)
 			}
-			server.registerTool(name, cfg)
 		}
 	}
 	server.httpHandler = mcpsdk.NewStreamableHTTPHandler(
-		func(*http.Request) *mcpsdk.Server { return server.sdk },
+		server.sdkForRequest,
 		&mcpsdk.StreamableHTTPOptions{
 			// 仅在显式配置公网 URL 且启用认证时放宽 SDK 的 localhost Host 校验。
 			// 反代或 Tunnel 会保留公网 Host，入口仍由静态 Token 或 OAuth resource 绑定保护。
@@ -64,6 +73,15 @@ func NewServer(runtime *app.Runtime, cfg config.Config) *Server {
 		},
 	)
 	return server
+}
+
+// sdkForRequest 按请求来源选择 MCP 目录：识别为 Notion 的请求拿到过滤后的
+// 小目录，其余所有客户端拿到完整目录。未配置过滤器时一律走完整目录。
+func (s *Server) sdkForRequest(r *http.Request) *mcpsdk.Server {
+	if s.sdkNotion != nil && isNotionMCPClient(r) {
+		return s.sdkNotion
+	}
+	return s.sdk
 }
 
 func (s *Server) AgentDockContext(ctx context.Context) (app.Result, error) {
@@ -114,7 +132,7 @@ func (s *Server) ServeStdio(in io.Reader, out io.Writer) error {
 	})
 }
 
-func (s *Server) registerTool(name string, cfg config.Config) {
+func (s *Server) registerTool(target *mcpsdk.Server, name string, cfg config.Config) {
 	def, ok := toolDefinition(name)
 	if !ok {
 		return
@@ -141,7 +159,7 @@ func (s *Server) registerTool(name string, cfg config.Config) {
 	}
 	// 使用低层 AddTool：AgentDock 的参数校验、权限错误和结构化输出都由
 	// Runtime 统一处理，SDK 只负责协议、会话与传输语义。
-	s.sdk.AddTool(tool, func(ctx context.Context, request *mcpsdk.CallToolRequest) (*mcpsdk.CallToolResult, error) {
+	target.AddTool(tool, func(ctx context.Context, request *mcpsdk.CallToolRequest) (*mcpsdk.CallToolResult, error) {
 		return s.callTool(ctx, name, request)
 	})
 }

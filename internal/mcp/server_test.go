@@ -221,6 +221,116 @@ func TestOfficialSDKToolsListPreservesFrozenD2AgentSchemas(t *testing.T) {
 	}
 }
 
+func TestNotionToolFilterBuildsSeparateCatalogs(t *testing.T) {
+	t.Setenv("AGENTDOCK_MCP_TOOLS_INCLUDE", "server_info")
+	t.Setenv("AGENTDOCK_MCP_TOOLS_EXCLUDE", "")
+	root := t.TempDir()
+	cfg := config.Config{AgentDockDefaultDir: root, AgentDockHome: filepath.Join(root, ".agentdock")}
+	if err := cfg.Normalize(); err != nil {
+		t.Fatalf("Normalize() error = %v", err)
+	}
+	runtime, err := app.NewRuntime(cfg)
+	if err != nil {
+		t.Fatalf("NewRuntime() error = %v", err)
+	}
+	defer runtime.Close()
+
+	server := NewServer(runtime, cfg)
+	if server.sdkNotion == nil {
+		t.Fatal("expected a Notion-filtered SDK server when the tool filter is configured")
+	}
+
+	notionTools := collectSDKToolNames(t, server.sdkNotion)
+	if len(notionTools) != 1 || notionTools[0] != "server_info" {
+		t.Fatalf("Notion catalog = %#v, want only server_info", notionTools)
+	}
+	fullTools := collectSDKToolNames(t, server.sdk)
+	if len(fullTools) != len(runtime.ToolNames()) {
+		t.Fatalf("full catalog size = %d, want %d (filter must not affect non-Notion clients)", len(fullTools), len(runtime.ToolNames()))
+	}
+	keptExecCommand := false
+	for _, name := range fullTools {
+		if name == "exec_command" {
+			keptExecCommand = true
+		}
+	}
+	if !keptExecCommand {
+		t.Fatal("full catalog should keep exec_command for non-Notion clients")
+	}
+}
+
+func TestSDKForRequestRoutesOnlyNotionClientsToFilteredCatalog(t *testing.T) {
+	t.Setenv("AGENTDOCK_MCP_TOOLS_INCLUDE", "server_info")
+	t.Setenv("AGENTDOCK_MCP_TOOLS_EXCLUDE", "")
+	root := t.TempDir()
+	cfg := config.Config{AgentDockDefaultDir: root, AgentDockHome: filepath.Join(root, ".agentdock")}
+	if err := cfg.Normalize(); err != nil {
+		t.Fatalf("Normalize() error = %v", err)
+	}
+	runtime, err := app.NewRuntime(cfg)
+	if err != nil {
+		t.Fatalf("NewRuntime() error = %v", err)
+	}
+	defer runtime.Close()
+
+	server := NewServer(runtime, cfg)
+
+	notionUA := httptest.NewRequest(http.MethodPost, "http://localhost/mcp", nil)
+	notionUA.Header.Set("User-Agent", "Notion MCP")
+	if server.sdkForRequest(notionUA) != server.sdkNotion {
+		t.Fatal("Notion User-Agent should be routed to the filtered catalog")
+	}
+	notionQuery := httptest.NewRequest(http.MethodPost, "http://localhost/mcp?client=notion", nil)
+	if server.sdkForRequest(notionQuery) != server.sdkNotion {
+		t.Fatal("?client=notion should be routed to the filtered catalog")
+	}
+	otherClient := httptest.NewRequest(http.MethodPost, "http://localhost/mcp", nil)
+	otherClient.Header.Set("User-Agent", "cursor/1.0")
+	if server.sdkForRequest(otherClient) != server.sdk {
+		t.Fatal("non-Notion clients must keep the full catalog")
+	}
+
+	// 未配置过滤时保持旧行为：即使是 Notion 客户端也使用完整目录。
+	t.Setenv("AGENTDOCK_MCP_TOOLS_INCLUDE", "")
+	unfiltered := NewServer(runtime, cfg)
+	if unfiltered.sdkNotion != nil {
+		t.Fatal("no filter configured should not build a Notion catalog")
+	}
+	if unfiltered.sdkForRequest(notionUA) != unfiltered.sdk {
+		t.Fatal("without a configured filter, even Notion clients get the full catalog")
+	}
+}
+
+func collectSDKToolNames(t *testing.T, sdkServer *mcpsdk.Server) []string {
+	t.Helper()
+	serverTransport, clientTransport := mcpsdk.NewInMemoryTransports()
+	serverDone := make(chan error, 1)
+	go func() { serverDone <- sdkServer.Run(t.Context(), serverTransport) }()
+
+	client := mcpsdk.NewClient(
+		&mcpsdk.Implementation{Name: "agentdock-filter-test", Version: "1.0.0"},
+		&mcpsdk.ClientOptions{Capabilities: &mcpsdk.ClientCapabilities{}},
+	)
+	session, err := client.Connect(t.Context(), clientTransport, nil)
+	if err != nil {
+		t.Fatalf("Connect() error = %v", err)
+	}
+	names := []string{}
+	for tool, err := range session.Tools(t.Context(), nil) {
+		if err != nil {
+			t.Fatalf("Tools() error = %v", err)
+		}
+		names = append(names, tool.Name)
+	}
+	if err := session.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+	if err := <-serverDone; err != nil {
+		t.Fatalf("Server.Run() error = %v", err)
+	}
+	return names
+}
+
 func TestStreamableHTTPStaysStatelessAcrossProtocolVersions(t *testing.T) {
 	// 回归保护：无论客户端协商哪个协议版本，/mcp 都必须保持无会话传输。
 	// Notion 的 MCP 客户端不会稳定携带 Mcp-Session-Id（initialize 之后也会
