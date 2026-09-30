@@ -134,6 +134,17 @@ func toolEvent(sessionID, callID, tool, status string) opencodenative.NativeEven
 	return opencodenative.NativeEvent{ID: "evt-" + callID + "-" + status, Type: "message.part.updated", Properties: props}
 }
 
+func sessionErrorEvent(sessionID, message string) opencodenative.NativeEvent {
+	props, _ := json.Marshal(map[string]any{
+		"sessionID": sessionID,
+		"error": map[string]any{
+			"name": "UnknownError",
+			"data": map[string]any{"message": message},
+		},
+	})
+	return opencodenative.NativeEvent{ID: "evt-session-error", Type: "session.error", Properties: props}
+}
+
 func TestRunUsesHighLevelTaskAndExactRootBinding(t *testing.T) {
 	bridge := &fakeNativeBridge{message: textMessage("native-root", "done from OpenCode")}
 	backend, err := New(bridge)
@@ -227,6 +238,56 @@ func TestRunProjectsOwnedRootAndDescendantToolTelemetry(t *testing.T) {
 	}
 	if len(emitted) != 2 || emitted[0].Tool != "read" || emitted[0].Descendant || emitted[1].Tool != "bash" || !emitted[1].Descendant {
 		t.Fatalf("emitted=%+v", emitted)
+	}
+}
+
+func TestRunFailsPromptlyOnRootSessionError(t *testing.T) {
+	bridge := &fakeNativeBridge{
+		observe: func(ctx context.Context, fn func(opencodenative.NativeEvent, int64) error) error {
+			if err := fn(sessionErrorEvent("native-root", "Model not found: jiyuan/missing-model"), 1); err != nil {
+				return err
+			}
+			<-ctx.Done()
+			return ctx.Err()
+		},
+	}
+	backend, _ := New(bridge)
+	started := time.Now()
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	_, err := backend.Run(ctx, Request{
+		AgentID: "agent-native-error", AgentDockSessionID: "session-native-error", Workspace: `C:\work`,
+		PermissionMode: "project", Provider: "jiyuan", Model: "missing-model", Variant: "max", Task: "Fail quickly.",
+	}, nil)
+	if err == nil || !strings.Contains(err.Error(), "Model not found: jiyuan/missing-model") {
+		t.Fatalf("err=%v want root session error", err)
+	}
+	if time.Since(started) >= 500*time.Millisecond {
+		t.Fatalf("native root error propagation was not prompt: %v", time.Since(started))
+	}
+}
+
+func TestRunIgnoresDescendantSessionErrorWhenRootCompletes(t *testing.T) {
+	bridge := &fakeNativeBridge{
+		message: textMessage("native-root", "root completed"),
+		observe: func(ctx context.Context, fn func(opencodenative.NativeEvent, int64) error) error {
+			if err := fn(sessionErrorEvent("native-child", "child failed"), 1); err != nil {
+				return err
+			}
+			<-ctx.Done()
+			return ctx.Err()
+		},
+	}
+	backend, _ := New(bridge)
+	result, err := backend.Run(context.Background(), Request{
+		AgentID: "agent-child-error", AgentDockSessionID: "session-child-error", Workspace: `C:\work`,
+		PermissionMode: "project", Provider: "jiyuan", Model: "deepseek-v4-flash-0731", Variant: "max", Task: "Complete at root.",
+	}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.FinalText != "root completed" {
+		t.Fatalf("result=%+v", result)
 	}
 }
 
