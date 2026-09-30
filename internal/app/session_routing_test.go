@@ -134,6 +134,10 @@ func TestJobToolsBindAndEnforceSessionOwnership(t *testing.T) {
 	if len(jobIDs) != 1 || jobIDs[0] != jobID {
 		t.Fatalf("session did not persist owned job id: %+v", sessionMap)
 	}
+	if _, err := manager.Cancel(context.Background(), jobID, "test cleanup"); err != nil {
+		t.Fatal(err)
+	}
+	waitAppJobState(t, manager, jobID, jobruntime.StateCancelled)
 }
 
 func TestSessionCloseCancelsOwnedJobWithoutAffectingOtherSession(t *testing.T) {
