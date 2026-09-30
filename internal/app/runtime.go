@@ -64,7 +64,7 @@ type Runtime struct {
 	jobs             *jobruntime.Manager
 	sessions         *sessionruntime.Manager
 	agents           *agentruntime.Manager
-	credentialStore  *credential.Store
+	credentialStore  agentCredentialStore
 	media            *toolmedia.Service
 	browser          *toolbrowser.Service
 	recall           *toolrecall.Service
