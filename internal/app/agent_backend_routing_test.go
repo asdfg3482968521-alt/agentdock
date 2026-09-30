@@ -50,10 +50,7 @@ func TestValidateAgentStartCredentialLegacyRequiresStoredBinding(t *testing.T) {
 }
 
 func TestValidateAgentStartCredentialLegacyRejectsProviderMismatch(t *testing.T) {
-	store, err := credential.NewStore(t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
+	store := newTestCredentialStore()
 	ctx := context.Background()
 	if _, err := store.Put(ctx, "cred_c25_provider_bound", "anthropic", []byte("C25_TEST_SECRET_provider_binding")); err != nil {
 		t.Fatal(err)
