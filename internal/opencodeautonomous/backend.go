@@ -32,6 +32,7 @@ type Request struct {
 	PermissionMode     string
 	Provider           string
 	Model              string
+	Variant            string
 	NativeAgent        string
 	Task               string
 	Constraints        []string
@@ -55,6 +56,7 @@ type Result struct {
 	RootOpenCodeSessionID string
 	Provider              string
 	Model                 string
+	Variant               string
 	FinalText             string
 	AutonomousToolSteps   int
 	Telemetry             []TelemetryEvent
@@ -82,6 +84,7 @@ func (b *OpenCodeAutonomousBackend) Run(ctx context.Context, request Request, si
 	request.PermissionMode = strings.TrimSpace(request.PermissionMode)
 	request.Provider = strings.TrimSpace(request.Provider)
 	request.Model = strings.TrimSpace(request.Model)
+	request.Variant = strings.TrimSpace(request.Variant)
 	request.NativeAgent = strings.TrimSpace(request.NativeAgent)
 	request.Task = strings.TrimSpace(request.Task)
 	if request.AgentID == "" || request.AgentDockSessionID == "" || request.Workspace == "" || request.Task == "" {
@@ -108,6 +111,7 @@ func (b *OpenCodeAutonomousBackend) Run(ctx context.Context, request Request, si
 		Workspace:          request.Workspace,
 		Provider:           request.Provider,
 		Model:              request.Model,
+		Variant:            request.Variant,
 		ExecutionMode:      ExecutionModeAutonomous,
 	})
 	if err != nil {
@@ -127,6 +131,7 @@ func (b *OpenCodeAutonomousBackend) Run(ctx context.Context, request Request, si
 	if request.Provider != "" {
 		prompt.Model = &opencodenative.ModelRef{ProviderID: request.Provider, ModelID: request.Model}
 	}
+	prompt.Variant = request.Variant
 
 	observeCtx, stopObserve := context.WithCancel(runCtx)
 	defer stopObserve()
@@ -237,6 +242,7 @@ func (b *OpenCodeAutonomousBackend) Run(ctx context.Context, request Request, si
 		RootOpenCodeSessionID: binding.OpenCodeSessionID,
 		Provider:              provider,
 		Model:                 model,
+		Variant:               request.Variant,
 		FinalText:             finalText(submitted.message),
 		AutonomousToolSteps:   toolSteps,
 		Telemetry:             stableTelemetry,
