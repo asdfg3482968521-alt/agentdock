@@ -75,7 +75,7 @@ func TestD3SupervisorHandlersUseCanonicalSessionWorkspaceAndDurableIdentity(t *t
 	if _, err := rt.sessions.BindNativeSession(record.SessionID, sessionruntime.NativeSessionBinding{
 		SubagentID: "subagent-a", AgentDockSessionID: record.SessionID, ClientRequestID: "start-a",
 		OpenCodeSessionID: "ses-root", Workspace: record.Workspace(), RuntimeScope: "session:" + record.SessionID,
-		PermissionMode: record.PermissionMode, Provider: "opencode", Model: "mimo-v2.5-free", ExecutionMode: "native-session",
+		PermissionMode: record.PermissionMode, Provider: "jiyuan", Model: "deepseek-flash", Variant: "high", ExecutionMode: "native-session",
 		State: sessionruntime.NativeConversationActive, ExecutionState: sessionruntime.NativeExecutionIdle,
 	}); err != nil {
 		t.Fatal(err)
@@ -100,8 +100,8 @@ func TestD3SupervisorHandlersUseCanonicalSessionWorkspaceAndDurableIdentity(t *t
 	if len(fake.messageRequest.Prompt.Parts) == 0 {
 		t.Fatalf("message prompt was not forwarded: %+v", fake.messageRequest.Prompt)
 	}
-	if fake.messageRequest.Prompt.Model == nil || fake.messageRequest.Prompt.Model.ProviderID != "opencode" || fake.messageRequest.Prompt.Model.ModelID != "mimo-v2.5-free" {
-		t.Fatalf("message prompt did not inherit durable binding model: %+v", fake.messageRequest.Prompt.Model)
+	if fake.messageRequest.Prompt.Model == nil || fake.messageRequest.Prompt.Model.ProviderID != "jiyuan" || fake.messageRequest.Prompt.Model.ModelID != "deepseek-flash" || fake.messageRequest.Prompt.Variant != "high" {
+		t.Fatalf("message prompt did not inherit durable binding model/variant: model=%+v variant=%q", fake.messageRequest.Prompt.Model, fake.messageRequest.Prompt.Variant)
 	}
 
 	correction, err := rt.Call(context.Background(), "agent_supervisor_correct", map[string]any{
@@ -115,6 +115,9 @@ func TestD3SupervisorHandlersUseCanonicalSessionWorkspaceAndDurableIdentity(t *t
 	}
 	if fake.correctionMode != nativebridge.CorrectionForce || fake.correctionRequest.Kind != "CORRECTION" || fake.correctionRequest.Workspace != record.Workspace() || fake.correctionRequest.ClientMessageID != "client-correction-1" {
 		t.Fatalf("correction route mismatch: request=%+v mode=%s", fake.correctionRequest, fake.correctionMode)
+	}
+	if fake.correctionRequest.Prompt.Model == nil || fake.correctionRequest.Prompt.Model.ProviderID != "jiyuan" || fake.correctionRequest.Prompt.Model.ModelID != "deepseek-flash" || fake.correctionRequest.Prompt.Variant != "high" {
+		t.Fatalf("correction prompt lost durable model/variant: model=%+v variant=%q", fake.correctionRequest.Prompt.Model, fake.correctionRequest.Prompt.Variant)
 	}
 
 	observation, err := rt.Call(context.Background(), "agent_supervisor_observe", map[string]any{
