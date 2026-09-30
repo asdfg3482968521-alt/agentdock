@@ -2,9 +2,14 @@ name: CI
 
 on:
   push:
-    branches: [main]
+    branches:
+      - main
+      - production-current-agentdock
+      - 'hardening/**'
   pull_request:
-    branches: [main]
+    branches:
+      - main
+      - production-current-agentdock
 
 permissions:
   contents: read
