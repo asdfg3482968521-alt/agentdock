@@ -15,14 +15,16 @@ import (
 )
 
 type fakeNativeBridge struct {
-	mu      sync.Mutex
-	starts  []nativebridge.StartRequest
-	prompts []opencodenative.PromptRequest
-	aborts  int
-	binding session.NativeSessionBinding
-	message opencodenative.Message
-	submit  func(context.Context, opencodenative.PromptRequest) (opencodenative.Message, error)
-	observe func(context.Context, func(opencodenative.NativeEvent, int64) error) error
+	mu       sync.Mutex
+	starts   []nativebridge.StartRequest
+	prompts  []opencodenative.PromptRequest
+	aborts   int
+	binding  session.NativeSessionBinding
+	message  opencodenative.Message
+	submit   func(context.Context, opencodenative.PromptRequest) (opencodenative.Message, error)
+	messages func(context.Context) ([]opencodenative.Message, error)
+	status   func(context.Context) (nativebridge.Status, error)
+	observe  func(context.Context, func(opencodenative.NativeEvent, int64) error) error
 }
 
 func (f *fakeNativeBridge) Start(_ context.Context, req nativebridge.StartRequest) (session.NativeSessionBinding, error) {
@@ -51,14 +53,54 @@ func (f *fakeNativeBridge) Start(_ context.Context, req nativebridge.StartReques
 	return binding, nil
 }
 
-func (f *fakeNativeBridge) SubmitMessage(ctx context.Context, _, _, _ string, prompt opencodenative.PromptRequest) (opencodenative.Message, error) {
+func (f *fakeNativeBridge) SubmitPromptAsync(ctx context.Context, _, _, _ string, prompt opencodenative.PromptRequest) error {
 	f.mu.Lock()
 	f.prompts = append(f.prompts, prompt)
 	f.mu.Unlock()
 	if f.submit != nil {
-		return f.submit(ctx, prompt)
+		message, err := f.submit(ctx, prompt)
+		if err != nil {
+			return err
+		}
+		f.mu.Lock()
+		f.message = message
+		f.mu.Unlock()
 	}
-	return f.message, nil
+	return nil
+}
+
+func (f *fakeNativeBridge) ListMessages(ctx context.Context, _, _, _ string) ([]opencodenative.Message, error) {
+	if f.messages != nil {
+		return f.messages(ctx)
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if len(f.prompts) == 0 {
+		return []opencodenative.Message{}, nil
+	}
+	prompt := f.prompts[len(f.prompts)-1]
+	root := f.binding.OpenCodeSessionID
+	if root == "" {
+		root = "native-root"
+	}
+	result := []opencodenative.Message{{
+		Info: opencodenative.MessageInfo{ID: prompt.MessageID, SessionID: root, Role: "user"},
+	}}
+	if f.message.Info.ID != "" {
+		result = append(result, f.message)
+	}
+	return result, nil
+}
+
+func (f *fakeNativeBridge) ObserveStatus(ctx context.Context, _, _, _ string) (nativebridge.Status, error) {
+	if f.status != nil {
+		return f.status(ctx)
+	}
+	root := f.binding.OpenCodeSessionID
+	if root == "" {
+		root = "native-root"
+	}
+	return nativebridge.Status{OpenCodeSessionID: root, Present: false}, nil
 }
 
 func (f *fakeNativeBridge) ObserveEvents(ctx context.Context, _, _, _ string, fn func(opencodenative.NativeEvent, int64) error) error {
@@ -124,6 +166,9 @@ func TestRunUsesHighLevelTaskAndExactRootBinding(t *testing.T) {
 	}
 	if prompt.Agent != "build" {
 		t.Fatalf("prompt agent=%q", prompt.Agent)
+	}
+	if prompt.MessageID != autonomousMessageID("agent-1") {
+		t.Fatalf("prompt message id=%q want stable id=%q", prompt.MessageID, autonomousMessageID("agent-1"))
 	}
 	if len(prompt.Parts) != 1 || !strings.Contains(prompt.Parts[0].Text, "Fix the failing tests autonomously.") || !strings.Contains(prompt.Parts[0].Text, "Do not change the public API.") {
 		t.Fatalf("prompt parts=%+v", prompt.Parts)
@@ -203,6 +248,80 @@ func TestRunCancellationAbortsExactNativeRoot(t *testing.T) {
 	bridge.mu.Unlock()
 	if aborts != 1 {
 		t.Fatalf("aborts=%d want=1", aborts)
+	}
+}
+
+func TestRunReconcilesAmbiguousAsyncSubmitFailureWithoutDuplicateDispatch(t *testing.T) {
+	submitErr := errors.New("POST /prompt_async returned HTTP 500 after commit")
+	var bridge *fakeNativeBridge
+	bridge = &fakeNativeBridge{}
+	bridge.submit = func(_ context.Context, prompt opencodenative.PromptRequest) (opencodenative.Message, error) {
+		bridge.mu.Lock()
+		bridge.message = textMessage("native-root", "reconciled")
+		bridge.mu.Unlock()
+		return opencodenative.Message{}, submitErr
+	}
+	bridge.messages = func(context.Context) ([]opencodenative.Message, error) {
+		bridge.mu.Lock()
+		defer bridge.mu.Unlock()
+		if len(bridge.prompts) == 0 {
+			return []opencodenative.Message{}, nil
+		}
+		prompt := bridge.prompts[0]
+		return []opencodenative.Message{
+			{Info: opencodenative.MessageInfo{ID: prompt.MessageID, SessionID: "native-root", Role: "user"}},
+			textMessage("native-root", "reconciled"),
+		}, nil
+	}
+	backend, _ := New(bridge)
+	result, err := backend.Run(context.Background(), Request{
+		AgentID: "agent-reconcile", AgentDockSessionID: "session-reconcile", Workspace: `C:\work`,
+		PermissionMode: "project", Provider: "jiyuan", Model: "deepseek-flash", Variant: "low", Task: "Reconcile me.",
+	}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.FinalText != "reconciled" || result.Variant != "low" {
+		t.Fatalf("result=%+v", result)
+	}
+	bridge.mu.Lock()
+	promptCount := len(bridge.prompts)
+	bridge.mu.Unlock()
+	if promptCount != 1 {
+		t.Fatalf("ambiguous submit was dispatched %d times; want exactly once", promptCount)
+	}
+}
+
+func TestRunDoesNotReuseBaselineAssistantMessage(t *testing.T) {
+	old := textMessage("native-root", "old result")
+	old.Info.ID = "msg-old"
+	newResult := textMessage("native-root", "new result")
+	newResult.Info.ID = "msg-new"
+	var calls int
+	var bridge *fakeNativeBridge
+	bridge = &fakeNativeBridge{message: newResult}
+	bridge.messages = func(context.Context) ([]opencodenative.Message, error) {
+		calls++
+		if len(bridge.prompts) == 0 {
+			return []opencodenative.Message{old}, nil
+		}
+		prompt := bridge.prompts[0]
+		return []opencodenative.Message{
+			old,
+			{Info: opencodenative.MessageInfo{ID: prompt.MessageID, SessionID: "native-root", Role: "user"}},
+			newResult,
+		}, nil
+	}
+	backend, _ := New(bridge)
+	result, err := backend.Run(context.Background(), Request{
+		AgentID: "agent-baseline", AgentDockSessionID: "session-baseline", Workspace: `C:\work`,
+		PermissionMode: "project", Provider: "jiyuan", Model: "deepseek-flash", Variant: "high", Task: "Do new work.",
+	}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.FinalText != "new result" || calls < 2 {
+		t.Fatalf("result=%+v calls=%d", result, calls)
 	}
 }
 
