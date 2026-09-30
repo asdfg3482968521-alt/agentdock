@@ -2,6 +2,8 @@ package opencodeautonomous
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -20,7 +22,9 @@ const defaultAbortTimeout = 5 * time.Second
 
 type NativeBridge interface {
 	Start(context.Context, nativebridge.StartRequest) (session.NativeSessionBinding, error)
-	SubmitMessage(context.Context, string, string, string, opencodenative.PromptRequest) (opencodenative.Message, error)
+	SubmitPromptAsync(context.Context, string, string, string, opencodenative.PromptRequest) error
+	ListMessages(context.Context, string, string, string) ([]opencodenative.Message, error)
+	ObserveStatus(context.Context, string, string, string) (nativebridge.Status, error)
 	ObserveEvents(context.Context, string, string, string, func(opencodenative.NativeEvent, int64) error) error
 	Abort(context.Context, string, string, string) error
 }
@@ -122,6 +126,7 @@ func (b *OpenCodeAutonomousBackend) Run(ctx context.Context, request Request, si
 	}
 
 	prompt := opencodenative.TextPrompt(highLevelPrompt(request.Task, request.Constraints))
+	prompt.MessageID = autonomousMessageID(request.AgentID)
 	prompt.Agent = request.NativeAgent
 	permissionMode := strings.TrimSpace(binding.PermissionMode)
 	if permissionMode == "" {
@@ -161,40 +166,40 @@ func (b *OpenCodeAutonomousBackend) Run(ctx context.Context, request Request, si
 		})
 	}()
 
-	type submitResult struct {
-		message opencodenative.Message
-		err     error
-	}
-	submitDone := make(chan submitResult, 1)
-	go func() {
-		message, submitErr := b.bridge.SubmitMessage(runCtx, binding.AgentDockSessionID, binding.SubagentID, binding.Workspace, prompt)
-		submitDone <- submitResult{message: message, err: submitErr}
-	}()
-
-	var submitted submitResult
-	select {
-	case <-runCtx.Done():
-		b.abort(binding)
+	baselineMessages, err := b.bridge.ListMessages(runCtx, binding.AgentDockSessionID, binding.SubagentID, binding.Workspace)
+	if err != nil {
 		stopObserve()
-		return Result{}, runCtx.Err()
-	case submitted = <-submitDone:
-		if runCtx.Err() != nil {
-			b.abort(binding)
+		return Result{}, fmt.Errorf("read autonomous native baseline messages: %w", err)
+	}
+	baseline := messageIDSet(baselineMessages)
+
+	if err := b.bridge.SubmitPromptAsync(runCtx, binding.AgentDockSessionID, binding.SubagentID, binding.Workspace, prompt); err != nil {
+		accepted, reconcileErr := b.reconcileAsyncAdmission(runCtx, binding, prompt.MessageID)
+		if reconcileErr != nil {
 			stopObserve()
-			return Result{}, runCtx.Err()
+			return Result{}, fmt.Errorf("reconcile autonomous native task after async submit error: %w (submit error: %v)", reconcileErr, err)
+		}
+		if !accepted {
+			stopObserve()
+			return Result{}, fmt.Errorf("submit autonomous native task asynchronously: %w", err)
 		}
 	}
-	if submitted.err != nil {
+
+	submitted, err := b.waitForCompletion(runCtx, binding, prompt.MessageID, baseline)
+	if err != nil {
+		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+			b.abort(binding)
+		}
 		stopObserve()
-		return Result{}, fmt.Errorf("submit autonomous native task: %w", submitted.err)
+		return Result{}, err
 	}
-	if submitted.message.Info.SessionID != "" && submitted.message.Info.SessionID != binding.OpenCodeSessionID {
+	if submitted.Info.SessionID != "" && submitted.Info.SessionID != binding.OpenCodeSessionID {
 		stopObserve()
-		return Result{}, fmt.Errorf("native result session mismatch: got %q want root %q", submitted.message.Info.SessionID, binding.OpenCodeSessionID)
+		return Result{}, fmt.Errorf("native result session mismatch: got %q want root %q", submitted.Info.SessionID, binding.OpenCodeSessionID)
 	}
 
-	// The synchronous native message returns only after OpenCode finishes the turn.
-	// Cancel SSE observation then wait for it to unwind so telemetry is stable.
+	// Completion is established by native message history plus root idle state.
+	// SSE remains telemetry/provenance only and is cancelled after the durable result exists.
 	stopObserve()
 	observeErr := <-observeDone
 	if observeErr != nil && !errors.Is(observeErr, context.Canceled) && !errors.Is(observeErr, context.DeadlineExceeded) {
@@ -205,8 +210,8 @@ func (b *OpenCodeAutonomousBackend) Run(ctx context.Context, request Request, si
 	// the SSE connection raced the first event. Descendant telemetry still comes
 	// from D3-B's ownership-filtered ObserveEvents stream.
 	telemetryMu.Lock()
-	fallbackTelemetry := make([]TelemetryEvent, 0, len(submitted.message.Parts))
-	for _, raw := range submitted.message.Parts {
+	fallbackTelemetry := make([]TelemetryEvent, 0, len(submitted.Parts))
+	for _, raw := range submitted.Parts {
 		item, ok := telemetryFromMessagePart(raw, binding.OpenCodeSessionID, binding.OpenCodeSessionID)
 		if !ok {
 			continue
@@ -243,10 +248,124 @@ func (b *OpenCodeAutonomousBackend) Run(ctx context.Context, request Request, si
 		Provider:              provider,
 		Model:                 model,
 		Variant:               request.Variant,
-		FinalText:             finalText(submitted.message),
+		FinalText:             finalText(submitted),
 		AutonomousToolSteps:   toolSteps,
 		Telemetry:             stableTelemetry,
 	}, nil
+}
+
+func autonomousMessageID(agentID string) string {
+	sum := sha256.Sum256([]byte(strings.TrimSpace(agentID) + "\x00autonomous-start"))
+	return "msg_" + hex.EncodeToString(sum[:16])
+}
+
+func messageIDSet(messages []opencodenative.Message) map[string]struct{} {
+	result := make(map[string]struct{}, len(messages))
+	for _, message := range messages {
+		if id := strings.TrimSpace(message.Info.ID); id != "" {
+			result[id] = struct{}{}
+		}
+	}
+	return result
+}
+
+func containsMessageID(messages []opencodenative.Message, messageID string) bool {
+	messageID = strings.TrimSpace(messageID)
+	for _, message := range messages {
+		if strings.TrimSpace(message.Info.ID) == messageID {
+			return true
+		}
+	}
+	return false
+}
+
+func (b *OpenCodeAutonomousBackend) reconcileAsyncAdmission(ctx context.Context, binding session.NativeSessionBinding, messageID string) (bool, error) {
+	backoff := 25 * time.Millisecond
+	for attempts := 0; attempts < 6; attempts++ {
+		messages, err := b.bridge.ListMessages(ctx, binding.AgentDockSessionID, binding.SubagentID, binding.Workspace)
+		if err == nil && containsMessageID(messages, messageID) {
+			return true, nil
+		}
+		if ctx.Err() != nil {
+			return false, ctx.Err()
+		}
+		if err != nil && attempts == 5 {
+			return false, err
+		}
+		timer := time.NewTimer(backoff)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return false, ctx.Err()
+		case <-timer.C:
+		}
+		if backoff < 200*time.Millisecond {
+			backoff *= 2
+		}
+	}
+	return false, nil
+}
+
+func (b *OpenCodeAutonomousBackend) waitForCompletion(ctx context.Context, binding session.NativeSessionBinding, promptMessageID string, baseline map[string]struct{}) (opencodenative.Message, error) {
+	ticker := time.NewTicker(75 * time.Millisecond)
+	defer ticker.Stop()
+	var candidate opencodenative.Message
+	var lastMessagesErr, lastStatusErr error
+	for {
+		messages, messagesErr := b.bridge.ListMessages(ctx, binding.AgentDockSessionID, binding.SubagentID, binding.Workspace)
+		if messagesErr == nil {
+			lastMessagesErr = nil
+			if completion, ok, completionErr := autonomousCompletion(messages, promptMessageID, baseline); completionErr != nil {
+				return opencodenative.Message{}, completionErr
+			} else if ok {
+				candidate = completion
+			}
+		} else {
+			lastMessagesErr = messagesErr
+		}
+
+		status, statusErr := b.bridge.ObserveStatus(ctx, binding.AgentDockSessionID, binding.SubagentID, binding.Workspace)
+		if statusErr == nil {
+			lastStatusErr = nil
+			if candidate.Info.ID != "" && !status.Present {
+				return candidate, nil
+			}
+		} else {
+			lastStatusErr = statusErr
+		}
+
+		select {
+		case <-ctx.Done():
+			if lastMessagesErr != nil || lastStatusErr != nil {
+				return opencodenative.Message{}, fmt.Errorf("wait for autonomous native completion: %w (messages=%v status=%v)", ctx.Err(), lastMessagesErr, lastStatusErr)
+			}
+			return opencodenative.Message{}, ctx.Err()
+		case <-ticker.C:
+		}
+	}
+}
+
+func autonomousCompletion(messages []opencodenative.Message, promptMessageID string, baseline map[string]struct{}) (opencodenative.Message, bool, error) {
+	sawPrompt := strings.TrimSpace(promptMessageID) == ""
+	var candidate opencodenative.Message
+	for _, message := range messages {
+		id := strings.TrimSpace(message.Info.ID)
+		if id == strings.TrimSpace(promptMessageID) {
+			sawPrompt = true
+			continue
+		}
+		if !sawPrompt || strings.ToLower(strings.TrimSpace(message.Info.Role)) != "assistant" {
+			continue
+		}
+		if _, existed := baseline[id]; existed && id != "" {
+			continue
+		}
+		if message.Info.HasError() {
+			return opencodenative.Message{}, false, fmt.Errorf("autonomous native assistant message %s reported an error: %s", id, strings.TrimSpace(string(message.Info.Error)))
+		}
+		candidate = message
+	}
+	return candidate, candidate.Info.ID != "", nil
 }
 
 func (b *OpenCodeAutonomousBackend) abort(binding session.NativeSessionBinding) {
