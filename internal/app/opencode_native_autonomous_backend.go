@@ -157,6 +157,11 @@ func (b *openCodeNativeAutonomousAgentBackend) Run(ctx context.Context, request 
 	if resolvedModel == "" {
 		resolvedModel = canonicalD3NativeModel(d3NativeModelRoute{Provider: result.Provider, Model: result.Model, Variant: result.Variant})
 	}
+	if emit != nil && strings.TrimSpace(result.FinalText) != "" {
+		if err := emit(agentruntime.BackendEvent{Kind: agentruntime.ProviderEventText, Text: result.FinalText}); err != nil {
+			return agentruntime.BackendResult{}, err
+		}
+	}
 	return agentruntime.BackendResult{
 		Summary:       result.FinalText,
 		ResolvedModel: resolvedModel,
