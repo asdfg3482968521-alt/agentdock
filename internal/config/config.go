@@ -379,7 +379,7 @@ func (c *Config) Normalize() error {
 			return fmt.Errorf("InstructionsFile must be a regular file: %s", c.InstructionsFile)
 		}
 		if info.Size() > maxInstructionsFileBytes {
-			return fmt.Errorf("InstructionsFile %s exceeds %d bytes", c.InstructionsFile)
+			return fmt.Errorf("InstructionsFile %s exceeds %d bytes", c.InstructionsFile, maxInstructionsFileBytes)
 		}
 
 		file, err := os.Open(c.InstructionsFile)
