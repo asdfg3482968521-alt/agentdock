@@ -307,8 +307,6 @@ func (b *OpenCodeAutonomousBackend) reconcileAsyncAdmission(ctx context.Context,
 		}
 		timer := time.NewTimer(backoff)
 		select {
-		case failure := <-nativeFailure:
-			return opencodenative.Message{}, failure
 		case <-ctx.Done():
 			timer.Stop()
 			return false, ctx.Err()
@@ -355,6 +353,8 @@ func (b *OpenCodeAutonomousBackend) waitForCompletion(ctx context.Context, bindi
 		}
 
 		select {
+		case failure := <-nativeFailure:
+			return opencodenative.Message{}, failure
 		case <-ctx.Done():
 			if lastMessagesErr != nil || lastStatusErr != nil {
 				return opencodenative.Message{}, fmt.Errorf("wait for autonomous native completion: %w (messages=%v status=%v)", ctx.Err(), lastMessagesErr, lastStatusErr)
