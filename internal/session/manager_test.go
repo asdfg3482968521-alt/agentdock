@@ -20,6 +20,15 @@ func (g *fakeGit) DetectRepository(_ context.Context, path string) (string, bool
 	if root, ok := g.repos[cleanKey(path)]; ok {
 		return root, true, nil
 	}
+	canonicalPath, pathErr := filepath.EvalSymlinks(path)
+	if pathErr == nil {
+		for _, root := range g.repos {
+			canonicalRoot, rootErr := filepath.EvalSymlinks(root)
+			if rootErr == nil && cleanKey(canonicalRoot) == cleanKey(canonicalPath) {
+				return canonicalRoot, true, nil
+			}
+		}
+	}
 	return path, false, nil
 }
 
