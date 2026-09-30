@@ -34,7 +34,13 @@ jobs:
 
       - name: Format check
         shell: bash
-        run: test -z "$(gofmt -l ./cmd ./internal)"
+        run: |
+          unformatted="$(gofmt -l ./cmd ./internal)"
+          if [ -n "$unformatted" ]; then
+            echo "gofmt required for:"
+            printf '%s\n' "$unformatted"
+            exit 1
+          fi
 
       - name: Test
         run: go test ./...
