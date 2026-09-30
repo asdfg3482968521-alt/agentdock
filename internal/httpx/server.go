@@ -653,18 +653,18 @@ func setBearerChallenge(w http.ResponseWriter, cfg config.Config, r *http.Reques
 func oauthMetadata(cfg config.Config, r *http.Request) map[string]any {
 	issuer := issuerFor(cfg, r)
 	return map[string]any{
-		"issuer":                                issuer,
-		"authorization_endpoint":                issuer + "/oauth/authorize",
-		"token_endpoint":                        issuer + "/oauth/token",
-		"registration_endpoint":                 issuer + "/register",
-		"response_types_supported":              []string{"code"},
-		"grant_types_supported":                 []string{"authorization_code", "refresh_token"},
-		"code_challenge_methods_supported":      []string{"S256"},
+		"issuer":                           issuer,
+		"authorization_endpoint":           issuer + "/oauth/authorize",
+		"token_endpoint":                   issuer + "/oauth/token",
+		"registration_endpoint":            issuer + "/register",
+		"response_types_supported":         []string{"code"},
+		"grant_types_supported":            []string{"authorization_code", "refresh_token"},
+		"code_challenge_methods_supported": []string{"S256"},
 		"token_endpoint_auth_methods_supported": []string{
 			auth.OAuthTokenEndpointAuthNone,
 			auth.OAuthTokenEndpointAuthClientSecretPost,
 		},
-		"resource_indicators_supported":         true,
+		"resource_indicators_supported": true,
 	}
 }
 
