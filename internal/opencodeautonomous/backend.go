@@ -144,8 +144,16 @@ func (b *OpenCodeAutonomousBackend) Run(ctx context.Context, request Request, si
 	telemetry := make([]TelemetryEvent, 0, 8)
 	completedCalls := map[string]struct{}{}
 	observeDone := make(chan error, 1)
+	nativeFailure := make(chan error, 1)
 	go func() {
 		observeDone <- b.bridge.ObserveEvents(observeCtx, binding.AgentDockSessionID, binding.SubagentID, binding.Workspace, func(event opencodenative.NativeEvent, cursor int64) error {
+			if failure := rootSessionFailure(event, binding.OpenCodeSessionID); failure != nil {
+				select {
+				case nativeFailure <- failure:
+				default:
+				}
+				return nil
+			}
 			item, ok := telemetryFromNativeEvent(event, cursor, binding.OpenCodeSessionID)
 			if !ok {
 				return nil
@@ -190,7 +198,7 @@ func (b *OpenCodeAutonomousBackend) Run(ctx context.Context, request Request, si
 		}
 	}
 
-	submitted, err := b.waitForCompletion(runCtx, binding, prompt.MessageID, baseline)
+	submitted, err := b.waitForCompletion(runCtx, binding, prompt.MessageID, baseline, nativeFailure)
 	if err != nil {
 		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 			b.abort(binding)
@@ -299,6 +307,8 @@ func (b *OpenCodeAutonomousBackend) reconcileAsyncAdmission(ctx context.Context,
 		}
 		timer := time.NewTimer(backoff)
 		select {
+		case failure := <-nativeFailure:
+			return opencodenative.Message{}, failure
 		case <-ctx.Done():
 			timer.Stop()
 			return false, ctx.Err()
@@ -311,12 +321,17 @@ func (b *OpenCodeAutonomousBackend) reconcileAsyncAdmission(ctx context.Context,
 	return false, nil
 }
 
-func (b *OpenCodeAutonomousBackend) waitForCompletion(ctx context.Context, binding session.NativeSessionBinding, promptMessageID string, baseline map[string]struct{}) (opencodenative.Message, error) {
+func (b *OpenCodeAutonomousBackend) waitForCompletion(ctx context.Context, binding session.NativeSessionBinding, promptMessageID string, baseline map[string]struct{}, nativeFailure <-chan error) (opencodenative.Message, error) {
 	ticker := time.NewTicker(75 * time.Millisecond)
 	defer ticker.Stop()
 	var candidate opencodenative.Message
 	var lastMessagesErr, lastStatusErr error
 	for {
+		select {
+		case failure := <-nativeFailure:
+			return opencodenative.Message{}, failure
+		default:
+		}
 		messages, messagesErr := b.bridge.ListMessages(ctx, binding.AgentDockSessionID, binding.SubagentID, binding.Workspace)
 		if messagesErr == nil {
 			lastMessagesErr = nil
@@ -422,6 +437,46 @@ type nativeToolPart struct {
 type nativeEventProperties struct {
 	SessionID string          `json:"sessionID"`
 	Part      json.RawMessage `json:"part"`
+}
+
+func rootSessionFailure(event opencodenative.NativeEvent, rootSessionID string) error {
+	if event.Type != "session.error" {
+		return nil
+	}
+	var properties struct {
+		SessionID string          `json:"sessionID"`
+		Error     json.RawMessage `json:"error"`
+	}
+	if err := json.Unmarshal(event.Properties, &properties); err != nil {
+		return nil
+	}
+	if strings.TrimSpace(properties.SessionID) != strings.TrimSpace(rootSessionID) {
+		return nil
+	}
+	message := ""
+	var envelope struct {
+		Name    string `json:"name"`
+		Message string `json:"message"`
+		Data    struct {
+			Message string `json:"message"`
+		} `json:"data"`
+	}
+	if len(properties.Error) > 0 && json.Unmarshal(properties.Error, &envelope) == nil {
+		message = strings.TrimSpace(envelope.Data.Message)
+		if message == "" {
+			message = strings.TrimSpace(envelope.Message)
+		}
+		if message == "" {
+			message = strings.TrimSpace(envelope.Name)
+		}
+	}
+	if message == "" {
+		message = strings.TrimSpace(string(properties.Error))
+	}
+	if message == "" || message == "null" {
+		message = "OpenCode reported an unknown native session error"
+	}
+	return fmt.Errorf("autonomous native root session error: %s", message)
 }
 
 func telemetryFromNativeEvent(event opencodenative.NativeEvent, cursor int64, rootSessionID string) (TelemetryEvent, bool) {
