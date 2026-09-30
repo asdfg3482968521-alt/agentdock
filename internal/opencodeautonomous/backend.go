@@ -174,6 +174,11 @@ func (b *OpenCodeAutonomousBackend) Run(ctx context.Context, request Request, si
 	baseline := messageIDSet(baselineMessages)
 
 	if err := b.bridge.SubmitPromptAsync(runCtx, binding.AgentDockSessionID, binding.SubagentID, binding.Workspace, prompt); err != nil {
+		if runCtx.Err() != nil {
+			b.abort(binding)
+			stopObserve()
+			return Result{}, runCtx.Err()
+		}
 		accepted, reconcileErr := b.reconcileAsyncAdmission(runCtx, binding, prompt.MessageID)
 		if reconcileErr != nil {
 			stopObserve()
@@ -247,7 +252,7 @@ func (b *OpenCodeAutonomousBackend) Run(ctx context.Context, request Request, si
 		RootOpenCodeSessionID: binding.OpenCodeSessionID,
 		Provider:              provider,
 		Model:                 model,
-		Variant:               request.Variant,
+		Variant:               binding.Variant,
 		FinalText:             finalText(submitted),
 		AutonomousToolSteps:   toolSteps,
 		Telemetry:             stableTelemetry,
