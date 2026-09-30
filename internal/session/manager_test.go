@@ -117,7 +117,7 @@ func TestOpenGitSessionsCreatesUniqueManagedWorktrees(t *testing.T) {
 	if a.SessionID == b.SessionID || a.Branch == nil || b.Branch == nil || *a.Branch == *b.Branch || a.Worktree == nil || b.Worktree == nil || cleanKey(*a.Worktree) == cleanKey(*b.Worktree) {
 		t.Fatalf("git isolation not unique: A=%+v B=%+v", a, b)
 	}
-	managedRoot := filepath.Join(root, "worktrees")
+	managedRoot := manager.worktreeRoot
 	if !pathWithin(managedRoot, *a.Worktree) || !pathWithin(managedRoot, *b.Worktree) {
 		t.Fatalf("worktree escaped managed root: %q %q", *a.Worktree, *b.Worktree)
 	}
