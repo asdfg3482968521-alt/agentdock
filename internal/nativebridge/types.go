@@ -29,6 +29,7 @@ const (
 	metadataPermissionMode   = "agentdock_permission_mode"
 	metadataProvider         = "agentdock_provider"
 	metadataModel            = "agentdock_model"
+	metadataVariant          = "agentdock_variant"
 	metadataExecutionMode    = "agentdock_execution_mode"
 	metadataNativeRuntimeSHA = "agentdock_native_runtime_sha"
 )
@@ -104,6 +105,7 @@ type StartRequest struct {
 	Workspace          string
 	Provider           string
 	Model              string
+	Variant            string
 	ExecutionMode      string
 }
 
