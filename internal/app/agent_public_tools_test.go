@@ -13,7 +13,6 @@ import (
 	"time"
 
 	agentruntime "github.com/uvwt/agentdock/internal/agent"
-	"github.com/uvwt/agentdock/internal/credential"
 	sessionruntime "github.com/uvwt/agentdock/internal/session"
 )
 
@@ -78,10 +77,7 @@ func newPublicAgentRuntime(t *testing.T) (*Runtime, string, *publicTestProvider,
 	if rt.agents != nil {
 		_ = rt.agents.Close()
 	}
-	store, err := credential.NewStore(rt.cfg.AgentDockHome)
-	if err != nil {
-		t.Fatal(err)
-	}
+	store := newTestCredentialStore()
 	if _, err := store.Put(context.Background(), "cred_fake_default", "fake", []byte("D2_TEST_SECRET_public_default")); err != nil {
 		t.Fatal(err)
 	}
