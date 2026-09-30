@@ -43,11 +43,48 @@ func TestOpenCodeNativeAutonomousBackendMetadataAndModel(t *testing.T) {
 	if metadata.BackendIdentity() != agentruntime.BackendIdentityOpenCode || metadata.RequiresCredential() {
 		t.Fatalf("metadata identity=%q requires_credential=%v", metadata.BackendIdentity(), metadata.RequiresCredential())
 	}
-	for raw, want := range map[string]string{"": d3NativeAutonomousDefaultModel, "default": d3NativeAutonomousDefaultModel, "custom-model": "custom-model"} {
+	for raw, want := range map[string]string{"": d3NativeAutonomousDefaultModel, "default": d3NativeAutonomousDefaultModel, "custom-model": "custom-model", "jiyuan/deepseek-flash#low": "jiyuan/deepseek-flash#low"} {
 		got, err := backend.ResolveModel(raw)
 		if err != nil || got != want {
 			t.Fatalf("ResolveModel(%q)=%q err=%v want=%q", raw, got, err, want)
 		}
+	}
+}
+
+func TestParseD3NativeModelRouteSplitsProviderModelAndVariant(t *testing.T) {
+	route, err := parseD3NativeModelRoute("jiyuan/deepseek-flash#max")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if route.Provider != "jiyuan" || route.Model != "deepseek-flash" || route.Variant != "max" {
+		t.Fatalf("route=%+v", route)
+	}
+	if got := canonicalD3NativeModel(route); got != "jiyuan/deepseek-flash#max" {
+		t.Fatalf("canonical=%q", got)
+	}
+}
+
+func TestOpenCodeNativeAutonomousBackendMapsCompositeModelRoute(t *testing.T) {
+	runner := &fakeD3G1AutonomousRunner{
+		result: opencodeautonomous.Result{
+			SubagentID: "agent-route", RootOpenCodeSessionID: "native-root-route",
+			Provider: "jiyuan", Model: "deepseek-flash", Variant: "high", FinalText: "ok",
+		},
+	}
+	backend := newOpenCodeNativeAutonomousAgentBackend(runner)
+	result, err := backend.Run(context.Background(), agentruntime.BackendRequest{
+		AgentID: "agent-route", SessionID: "session-route", Workspace: `C:\work\route`,
+		PermissionMode: "project", Provider: d3NativeAutonomousProvider,
+		Model: "jiyuan/deepseek-flash#high", Prompt: "route model correctly", Timeout: time.Second,
+	}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if runner.request.Provider != "jiyuan" || runner.request.Model != "deepseek-flash" || runner.request.Variant != "high" {
+		t.Fatalf("runner request=%+v", runner.request)
+	}
+	if result.ResolvedModel != "jiyuan/deepseek-flash#high" {
+		t.Fatalf("resolved model=%q", result.ResolvedModel)
 	}
 }
 
