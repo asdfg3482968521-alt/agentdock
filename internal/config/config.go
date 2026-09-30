@@ -394,7 +394,7 @@ func (c *Config) Normalize() error {
 			return fmt.Errorf("read InstructionsFile %s: %w", c.InstructionsFile, err)
 		}
 		if len(data) > maxInstructionsFileBytes {
-			return fmt.Errorf("InstructionsFile %s exceeds %d bytes", c.InstructionsFile)
+			return fmt.Errorf("InstructionsFile %s exceeds %d bytes", c.InstructionsFile, maxInstructionsFileBytes)
 		}
 		if !utf8.Valid(data) {
 			return fmt.Errorf("InstructionsFile must contain valid UTF-8: %s", c.InstructionsFile)
