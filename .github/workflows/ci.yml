@@ -15,42 +15,6 @@ permissions:
   contents: read
 
 jobs:
-  subagent-hardening:
-    name: Subagent hardening (${{ matrix.os }})
-    runs-on: ${{ matrix.os }}
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [ubuntu-latest, macos-latest, windows-latest]
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Setup Go
-        uses: actions/setup-go@v5
-        with:
-          go-version-file: go.mod
-          cache: true
-
-      - name: Focused subagent tests
-        run: go test ./internal/opencodeautonomous ./internal/opencodenative ./internal/nativebridge
-
-      - name: Durable session binding tests
-        run: go test ./internal/session -run '^TestNativeSessionBinding'
-
-      - name: Native routing and supervisor tests
-        run: go test ./internal/app -run '^(TestOpenCodeNativeAutonomousBackend|TestParseD3NativeModelRoute|TestD3Supervisor)'
-
-      - name: Focused race
-        if: runner.os == 'Linux'
-        run: go test -race ./internal/opencodeautonomous ./internal/opencodenative ./internal/nativebridge
-
-      - name: Focused vet
-        run: go vet ./internal/opencodeautonomous ./internal/opencodenative ./internal/nativebridge ./internal/app ./internal/session
-
-      - name: Build AgentDock
-        run: go build ./cmd/agentdock
-
   go:
     name: Go check (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
