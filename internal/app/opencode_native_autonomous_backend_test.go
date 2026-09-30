@@ -122,11 +122,14 @@ func TestOpenCodeNativeAutonomousBackendMapsAgentRequestAndTelemetry(t *testing.
 	if result.Summary != "D3 G1 autonomous result" || result.ResolvedModel != d3NativeAutonomousDefaultModel || result.StopReason != "stop" {
 		t.Fatalf("backend result=%+v", result)
 	}
-	if len(emitted) != 1 || emitted[0].Kind != agentruntime.ProviderEventText || emitted[0].Tool != nil {
-		t.Fatalf("telemetry must be projected as text-only Agent output: %+v", emitted)
+	if len(emitted) != 2 || emitted[0].Kind != agentruntime.ProviderEventText || emitted[0].Tool != nil || emitted[1].Kind != agentruntime.ProviderEventText || emitted[1].Tool != nil {
+		t.Fatalf("telemetry and final text must be projected as text-only Agent output: %+v", emitted)
 	}
 	if !strings.Contains(emitted[0].Text, `"tool":"read"`) || !strings.Contains(emitted[0].Text, `"call_id":"call-1"`) {
 		t.Fatalf("telemetry output=%q", emitted[0].Text)
+	}
+	if emitted[1].Text != "D3 G1 autonomous result" {
+		t.Fatalf("final output=%q want autonomous result", emitted[1].Text)
 	}
 }
 
