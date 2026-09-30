@@ -50,6 +50,9 @@ func (f *fakeNativeBridge) Start(_ context.Context, req nativebridge.StartReques
 	if binding.Model == "" {
 		binding.Model = req.Model
 	}
+	if binding.Variant == "" {
+		binding.Variant = req.Variant
+	}
 	return binding, nil
 }
 
