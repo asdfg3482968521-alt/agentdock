@@ -157,6 +157,7 @@ func (r *Runtime) d3SupervisorPrompt(sessionID, subagentID, text string) (openco
 	if strings.TrimSpace(binding.Provider) != "" && strings.TrimSpace(binding.Model) != "" {
 		prompt.Model = &opencodenative.ModelRef{ProviderID: binding.Provider, ModelID: binding.Model}
 	}
+	prompt.Variant = strings.TrimSpace(binding.Variant)
 	return prompt, nil
 }
 
