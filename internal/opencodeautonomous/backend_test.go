@@ -395,7 +395,7 @@ func TestRunPropagatesFallbackTelemetrySinkError(t *testing.T) {
 		t.Fatal(err)
 	}
 	bridge := &fakeNativeBridge{
-		message: opencodenative.Message{Info: opencodenative.MessageInfo{SessionID: "native-root"}, Parts: []json.RawMessage{toolPart}},
+		message: opencodenative.Message{Info: opencodenative.MessageInfo{ID: "msg-fallback-result", SessionID: "native-root", Role: "assistant"}, Parts: []json.RawMessage{toolPart}},
 		observe: func(ctx context.Context, _ func(opencodenative.NativeEvent, int64) error) error {
 			<-ctx.Done()
 			return ctx.Err()
