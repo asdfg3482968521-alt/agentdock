@@ -54,6 +54,7 @@ type Runtime struct {
 	ws               *workspace.Workspace
 	skills           *toolskill.Service
 	mcpClients       *mcpclient.Manager
+	mcpSessions      *MCPClientSessionStore
 	tasks            *taskstate.Store
 	command          *toolcommand.Service
 	files            *toolfile.Service
@@ -109,6 +110,12 @@ func NewRuntime(cfg config.Config) (*Runtime, error) {
 		cfg: cfg, ws: ws, skills: skills,
 		mcpClients: mcpClients, tasks: tasks,
 		commandCtx: commandCtx, commandCancel: commandCancel,
+	}
+	mcpSessions, mcpSessionErr := newMCPClientSessionStore(cfg.AgentDockHome)
+	if mcpSessionErr != nil {
+		runtime.recordStartupIssue("mcp_session_awareness", mcpSessionErr)
+	} else {
+		runtime.mcpSessions = mcpSessions
 	}
 
 	// Everything below this point is optional to the HTTP/MCP control plane.
@@ -324,16 +331,17 @@ func (r *Runtime) subsystemStatus() map[string]any {
 		return map[string]any{}
 	}
 	return map[string]any{
-		"session":             r.sessions != nil,
-		"job":                 r.jobs != nil,
-		"agent":               r.agents != nil,
-		"credential_store":    r.credentialStore != nil,
-		"opencode_execution":  r.openCode != nil,
-		"opencode_native":     r.nativeSupervisor != nil,
-		"opencode_autonomous": r.nativeAutonomous != nil,
-		"acp":                 r.acp != nil,
-		"dynamic_mcp":         r.dynamicMCP != nil,
-		"browser":             r.browser != nil,
+		"session":               r.sessions != nil,
+		"job":                   r.jobs != nil,
+		"agent":                 r.agents != nil,
+		"credential_store":      r.credentialStore != nil,
+		"opencode_execution":    r.openCode != nil,
+		"opencode_native":       r.nativeSupervisor != nil,
+		"opencode_autonomous":   r.nativeAutonomous != nil,
+		"acp":                   r.acp != nil,
+		"dynamic_mcp":           r.dynamicMCP != nil,
+		"browser":               r.browser != nil,
+		"mcp_session_awareness": r.mcpSessions != nil,
 	}
 }
 
@@ -538,10 +546,17 @@ func (r *Runtime) serverInfo() Result {
 		"startup_issues":   r.startupIssueList(),
 		"subsystems":       r.subsystemStatus(),
 
-		"auth_enabled":  r.authEnabled(),
-		"endpoint_path": "/mcp",
-		"tools":         names,
-		"tool_count":    len(names),
+		"auth_enabled":          r.authEnabled(),
+		"endpoint_path":         "/mcp",
+		"mcp_session_awareness": r.mcpSessions != nil,
+		"mcp_session_state_file": func() string {
+			if r.mcpSessions == nil {
+				return ""
+			}
+			return r.mcpSessions.Path()
+		}(),
+		"tools":      names,
+		"tool_count": len(names),
 	}
 }
 

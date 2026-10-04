@@ -168,6 +168,26 @@ func (s *Server) callTool(ctx context.Context, name string, request *mcpsdk.Call
 	started := time.Now()
 	requestID := fmt.Sprintf("%s-%d", s.instanceID, s.requestSeq.Add(1))
 	plane := toolRequestPlane(name)
+	clientContext := mcpClientContextFromRequest(request)
+	sessionKey := ""
+	callOK := false
+	if clientContext.SessionID != "" {
+		ctx = app.WithMCPClientContext(ctx, clientContext)
+		if s != nil && s.runtime != nil {
+			recorded, recordErr := s.runtime.RecordMCPClientCall(clientContext, name, requestID)
+			if recordErr != nil {
+				slog.Warn("MCP client session activity persistence failed", "request_id", requestID, "server_instance", s.instanceID, "tool", name, "error", recordErr)
+			}
+			if key, ok := recorded["session_key"].(string); ok {
+				sessionKey = key
+			}
+			defer func() {
+				if _, finishErr := s.runtime.FinishMCPClientCall(clientContext, time.Since(started), callOK); finishErr != nil {
+					slog.Warn("MCP client session completion persistence failed", "request_id", requestID, "server_instance", s.instanceID, "tool", name, "error", finishErr)
+				}
+			}()
+		}
+	}
 	arguments := map[string]any{}
 	if request != nil && request.Params != nil && len(request.Params.Arguments) > 0 && string(request.Params.Arguments) != "null" {
 		if err := json.Unmarshal(request.Params.Arguments, &arguments); err != nil {
@@ -175,9 +195,17 @@ func (s *Server) callTool(ctx context.Context, name string, request *mcpsdk.Call
 			return nil, &sdkjsonrpc.Error{Code: sdkjsonrpc.CodeInvalidParams, Message: "tool arguments must be a JSON object"}
 		}
 	}
-	slog.Info("tool started", "request_id", requestID, "server_instance", s.instanceID, "tool", name, "plane", plane)
+	startedAttrs := []any{"request_id", requestID, "server_instance", s.instanceID, "tool", name, "plane", plane}
+	if sessionKey != "" {
+		startedAttrs = append(startedAttrs, "mcp_session_key", sessionKey)
+	}
+	slog.Info("tool started", startedAttrs...)
 	result, err := s.invokeTool(ctx, name, arguments, requestID, plane)
+	callOK = err == nil
 	finishedAttrs := []any{"request_id", requestID, "server_instance", s.instanceID, "tool", name, "plane", plane, "duration_ms", time.Since(started).Milliseconds(), "ok", err == nil}
+	if sessionKey != "" {
+		finishedAttrs = append(finishedAttrs, "mcp_session_key", sessionKey)
+	}
 	if err != nil {
 		finishedAttrs = append(finishedAttrs, "error", err)
 	}
@@ -192,6 +220,27 @@ func (s *Server) callTool(ctx context.Context, name string, request *mcpsdk.Call
 		return nil, fmt.Errorf("decode MCP tool result: %w", decodeErr)
 	}
 	return &response, nil
+}
+
+func mcpClientContextFromRequest(request *mcpsdk.CallToolRequest) app.MCPClientContext {
+	if request == nil || request.Params == nil {
+		return app.MCPClientContext{}
+	}
+	sessionID := ""
+	if request.Params.Meta != nil {
+		if value, ok := request.Params.Meta["openai/session"].(string); ok {
+			sessionID = strings.TrimSpace(value)
+		}
+	}
+	info := app.MCPClientContext{
+		SessionID:       sessionID,
+		ProtocolVersion: strings.TrimSpace(request.ProtocolVersion()),
+	}
+	if client := request.ClientInfo(); client != nil {
+		info.ClientName = strings.TrimSpace(client.Name)
+		info.ClientVersion = strings.TrimSpace(client.Version)
+	}
+	return info
 }
 
 func (s *Server) invokeTool(ctx context.Context, name string, arguments map[string]any, requestID, plane string) (result app.Result, err error) {
@@ -215,7 +264,7 @@ func (s *Server) invokeTool(ctx context.Context, name string, arguments map[stri
 
 func toolRequestPlane(name string) string {
 	switch name {
-	case "server_info", "agentdock_context", "mcp_manage", "mcp_tool_search", "mcp_tool_inspect":
+	case "server_info", "agentdock_context", "mcp_session_current", "mcp_session_bind", "mcp_manage", "mcp_tool_search", "mcp_tool_inspect":
 		return "CONTROL_PLANE"
 	default:
 		return "EXECUTION_PLANE"

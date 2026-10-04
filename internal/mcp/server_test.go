@@ -94,6 +94,110 @@ func TestToolEnvelopePassesThroughDynamicMCPContent(t *testing.T) {
 	}
 }
 
+func TestMCPClientContextReadsOpenAISessionMeta(t *testing.T) {
+	request := &mcpsdk.CallToolRequest{
+		Params: &mcpsdk.CallToolParamsRaw{
+			Meta: mcpsdk.Meta{"openai/session": " chatgpt-session-123 "},
+			Name: "server_info",
+		},
+	}
+	info := mcpClientContextFromRequest(request)
+	if info.SessionID != "chatgpt-session-123" {
+		t.Fatalf("SessionID = %q", info.SessionID)
+	}
+}
+
+func TestOfficialSDKPropagatesOpenAISessionMetaAndBinding(t *testing.T) {
+	root := t.TempDir()
+	cfg := config.Config{AgentDockDefaultDir: root, AgentDockHome: filepath.Join(root, ".agentdock")}
+	if err := cfg.Normalize(); err != nil {
+		t.Fatalf("Normalize() error = %v", err)
+	}
+	runtime, err := app.NewRuntime(cfg)
+	if err != nil {
+		t.Fatalf("NewRuntime() error = %v", err)
+	}
+	defer runtime.Close()
+
+	serverTransport, clientTransport := mcpsdk.NewInMemoryTransports()
+	server := NewServer(runtime, cfg)
+	serverDone := make(chan error, 1)
+	go func() { serverDone <- server.sdk.Run(t.Context(), serverTransport) }()
+
+	client := mcpsdk.NewClient(
+		&mcpsdk.Implementation{Name: "chatgpt-session-test", Version: "1.0.0"},
+		&mcpsdk.ClientOptions{Capabilities: &mcpsdk.ClientCapabilities{}},
+	)
+	session, err := client.Connect(t.Context(), clientTransport, nil)
+	if err != nil {
+		t.Fatalf("Connect() error = %v", err)
+	}
+
+	const rawSession = "openai-session-e2e-secret-123"
+	meta := mcpsdk.Meta{"openai/session": rawSession}
+	if _, err := session.CallTool(t.Context(), &mcpsdk.CallToolParams{
+		Meta:      meta,
+		Name:      "mcp_session_bind",
+		Arguments: map[string]any{"conversation_url": "https://chatgpt.com/c/e2e-1", "conversation_title": "E2E", "watchdog_task_id": "wd-e2e"},
+	}); err != nil {
+		t.Fatalf("mcp_session_bind error = %v", err)
+	}
+
+	current, err := session.CallTool(t.Context(), &mcpsdk.CallToolParams{
+		Meta: meta,
+		Name: "mcp_session_current",
+	})
+	if err != nil {
+		t.Fatalf("mcp_session_current error = %v", err)
+	}
+	if current.IsError {
+		t.Fatalf("mcp_session_current result = %#v", current)
+	}
+	structured, ok := current.StructuredContent.(map[string]any)
+	if !ok {
+		t.Fatalf("StructuredContent = %#v", current.StructuredContent)
+	}
+	sessionInfo, ok := structured["session"].(map[string]any)
+	if !ok {
+		t.Fatalf("session = %#v", structured["session"])
+	}
+	if sessionInfo["conversation_url"] != "https://chatgpt.com/c/e2e-1" || sessionInfo["watchdog_task_id"] != "wd-e2e" {
+		t.Fatalf("session binding = %#v", sessionInfo)
+	}
+	encoded, _ := json.Marshal(structured)
+	if strings.Contains(string(encoded), rawSession) {
+		t.Fatalf("public MCP response leaked raw session identity: %s", encoded)
+	}
+
+	statePath := filepath.Join(cfg.AgentDockHome, "mcp-client-sessions.json")
+	stateBytes, err := os.ReadFile(statePath)
+	if err != nil {
+		t.Fatalf("read MCP session state: %v", err)
+	}
+	if strings.Contains(string(stateBytes), rawSession) {
+		t.Fatalf("persisted MCP session state leaked raw session identity: %s", stateBytes)
+	}
+	var state map[string]any
+	if err := json.Unmarshal(stateBytes, &state); err != nil {
+		t.Fatalf("decode MCP session state: %v", err)
+	}
+	sessions, _ := state["sessions"].([]any)
+	if len(sessions) != 1 {
+		t.Fatalf("persisted sessions = %#v", sessions)
+	}
+	persisted, _ := sessions[0].(map[string]any)
+	if active, _ := persisted["active_calls"].(float64); active != 0 {
+		t.Fatalf("active_calls after completed tool = %#v", persisted["active_calls"])
+	}
+
+	if err := session.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+	if err := <-serverDone; err != nil {
+		t.Fatalf("Server.Run() error = %v", err)
+	}
+}
+
 func TestOfficialSDKServerListsAndCallsAgentDockTools(t *testing.T) {
 	root := t.TempDir()
 	cfg := config.Config{AgentDockDefaultDir: root, AgentDockHome: filepath.Join(root, ".agentdock")}

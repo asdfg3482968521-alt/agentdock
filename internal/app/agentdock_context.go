@@ -17,6 +17,7 @@ func (r *Runtime) AgentDockContext(ctx context.Context) (Result, error) {
 		"需要真实执行命令或检查环境时，先用 exec_command 查看现状，再修改，修改后真实验证。",
 		"先根据 Skill 索引的 name 和 description 选择相关 Skill，再用 read_file 读取其 file 指向的 SKILL.md；Skill 只提供流程与约束，实际操作使用命令、文件、浏览器或 MCP 工具。",
 		"AgentDock 自带工具直接调用；动态 MCP 工具先用 mcp_tool_search 查找、mcp_tool_inspect 读取 schema，再用 mcp_tool_call 执行。",
+		"当 MCP 客户端提供协议级 openai/session 元数据时，AgentDock 会自动记录匿名会话活动；需要把当前 ChatGPT 对话或 Watchdog 任务与该会话关联时，用 mcp_session_bind，不能把会话标识当普通工具参数伪造。",
 	}
 	sections := []capabilitySection{
 		{Title: "Skill 能力索引", Lines: splitNonEmptyLines(skillSummary)},
