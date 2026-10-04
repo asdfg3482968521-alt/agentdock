@@ -216,13 +216,29 @@ func OutputSchema(name string) map[string]any {
 		props["mcp_session_awareness"] = boolProp("Whether protocol-owned MCP client session tracking is available.")
 		props["mcp_session_state_file"] = stringProp("Local JSON state file containing MCP client session activity and bindings.")
 		props["mcp_call_log_file"] = stringProp("Compact one-line MCP call activity log.")
+		props["session_bootstrap_actions"] = map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "Actions accepted by agentdock_context for session bootstrap and Watchdog control."}
+		props["mcp_session_control_actions"] = map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "Actions accepted by mcp_session_control."}
+		props["watchdog_dashboard_url"] = stringProp("Configured loopback-only ChatGPT Watchdog dashboard URL.")
+		props["watchdog_dashboard_enabled"] = boolProp("Whether the Watchdog dashboard client is available.")
 	case "agentdock_context":
+		// 缓存客户端依赖 context 字段存在：每个成功动作都返回 context
+		// （bootstrap 为渲染全文，其余动作为空串），同时附加会话/watchdog。
 		required = []string{"context"}
-		props["context"] = stringProp("Rendered AgentDock bootstrap context text for clients that cannot inject system prompt context.")
+		props["context"] = stringProp("AgentDock context text returned by action=bootstrap; present but empty for status/bind/control actions.")
+		props["action"] = stringProp("Session bootstrap action applied: bootstrap, status, or bind; control actions are reported through the watchdog field.")
+		props["session"] = mcpClientSessionProp()
+		props["state_file"] = stringProp("Local MCP client session state file path.")
+		props["watchdog"] = objectProp("Watchdog dashboard task state and control result, present for status and control actions.")
 	case "mcp_session_current", "mcp_session_bind":
 		props["session"] = mcpClientSessionProp()
 		props["state_file"] = stringProp("Local MCP client session state file path.")
 		required = []string{"session", "state_file"}
+	case "mcp_session_control":
+		props["action"] = stringProp("Completed Watchdog control action.")
+		props["session"] = mcpClientSessionProp()
+		props["state_file"] = stringProp("Local MCP client session state file path.")
+		props["watchdog"] = objectProp("Structured Watchdog result: task_id, conversation_url, task_state_before/after, desired_state, accepted, effective, and a note when pending. effective is true only when the dashboard reported the desired task state after the request.")
+		required = []string{"action", "session", "state_file"}
 	case "read_file":
 		props["path"] = stringProp("Host path or skill:// resource URI. Relative Host paths resolve from ~/AgentDock.")
 		props["content"] = stringProp("Text content slice.")
@@ -546,7 +562,7 @@ func OutputSchema(name string) map[string]any {
 	}
 	additional := true
 	switch name {
-	case "session_open", "session_status", "session_list", "session_close", "agent_supervisor_message", "agent_supervisor_observe", "agent_supervisor_correct", "mcp_session_current", "mcp_session_bind":
+	case "session_open", "session_status", "session_list", "session_close", "agent_supervisor_message", "agent_supervisor_observe", "agent_supervisor_correct", "mcp_session_current", "mcp_session_bind", "mcp_session_control":
 		additional = false
 	}
 	return map[string]any{"type": "object", "properties": props, "required": required, "additionalProperties": additional}

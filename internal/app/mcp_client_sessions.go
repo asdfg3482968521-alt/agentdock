@@ -30,11 +30,17 @@ type mcpClientContextKey struct{}
 // AgentDock propagates from the protocol boundary into Runtime tool handlers.
 // SessionID is an opaque client-provided identifier such as OpenAI's
 // _meta["openai/session"]. It is never accepted as a normal tool argument.
+// ConversationURL, ConversationTitle and WatchdogTaskID are protocol-owned
+// _meta["agentdock/*"] hints captured the same way; they are used only for
+// first-call auto binding and are never accepted as identity arguments.
 type MCPClientContext struct {
-	SessionID       string
-	ClientName      string
-	ClientVersion   string
-	ProtocolVersion string
+	SessionID         string
+	ClientName        string
+	ClientVersion     string
+	ProtocolVersion   string
+	ConversationURL   string
+	ConversationTitle string
+	WatchdogTaskID    string
 }
 
 // WithMCPClientContext attaches protocol-owned caller metadata to a tool
@@ -48,6 +54,9 @@ func WithMCPClientContext(ctx context.Context, info MCPClientContext) context.Co
 	info.ClientName = strings.TrimSpace(info.ClientName)
 	info.ClientVersion = strings.TrimSpace(info.ClientVersion)
 	info.ProtocolVersion = strings.TrimSpace(info.ProtocolVersion)
+	info.ConversationURL = strings.TrimSpace(info.ConversationURL)
+	info.ConversationTitle = strings.TrimSpace(info.ConversationTitle)
+	info.WatchdogTaskID = strings.TrimSpace(info.WatchdogTaskID)
 	if info.SessionID == "" {
 		return ctx
 	}
@@ -325,6 +334,87 @@ func (s *MCPClientSessionStore) bind(sessionID, conversationURL, conversationTit
 	return record, nil
 }
 
+// autoBind applies the protocol-owned first-call binding in one atomic step:
+// an unbound session is bound deterministically from the caller metadata; an
+// already bound session is idempotent when the metadata agrees (stable
+// bound_at) and returns a conflict error otherwise. Invalid or absent
+// conversation URLs never bind and never fail the business call.
+func (s *MCPClientSessionStore) autoBind(info MCPClientContext) (MCPClientSessionRecord, error) {
+	if s == nil {
+		return MCPClientSessionRecord{}, errors.New("MCP client session store is unavailable")
+	}
+	sessionID := strings.TrimSpace(info.SessionID)
+	if sessionID == "" {
+		return MCPClientSessionRecord{}, errors.New("MCP client session id is unavailable")
+	}
+	conversationURL := strings.TrimSpace(info.ConversationURL)
+	conversationTitle := strings.TrimSpace(info.ConversationTitle)
+	watchdogTaskID := strings.TrimSpace(info.WatchdogTaskID)
+	if conversationURL == "" {
+		return MCPClientSessionRecord{}, nil
+	}
+	if err := validateChatGPTConversationURL(conversationURL); err != nil {
+		// 无效的协议元数据 URL 视同缺席：保持匿名跟踪，不阻断业务调用。
+		return MCPClientSessionRecord{}, nil
+	}
+	if len(conversationTitle) > 512 || len(watchdogTaskID) > 128 {
+		return MCPClientSessionRecord{}, nil
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	sessionKey := mcpSessionKey(sessionID)
+	record := s.sessions[sessionKey]
+	if record.SessionKey == "" {
+		record.SessionKey = sessionKey
+		record.SessionIDMasked = maskMCPSessionID(sessionID)
+		record.FirstSeenAt = now
+		record.LastSeenAt = now
+	}
+	canonical := canonicalConversationURL(conversationURL)
+	if record.ConversationURL == "" {
+		record.ConversationURL = canonical
+		record.ConversationTitle = conversationTitle
+		record.WatchdogTaskID = watchdogTaskID
+		record.BoundAt = now
+		s.sessions[sessionKey] = record
+		if err := s.persistLocked(); err != nil {
+			return record, err
+		}
+		return record, nil
+	}
+	if record.ConversationURL != canonical {
+		return record, errors.New("binding conflict: protocol conversation metadata disagrees with the existing binding")
+	}
+	if watchdogTaskID != "" && record.WatchdogTaskID != "" && record.WatchdogTaskID != watchdogTaskID {
+		return record, errors.New("binding conflict: protocol watchdog task metadata disagrees with the existing binding")
+	}
+	changed := false
+	if conversationTitle != "" && conversationTitle != record.ConversationTitle {
+		record.ConversationTitle = conversationTitle
+		changed = true
+	}
+	if watchdogTaskID != "" && record.WatchdogTaskID == "" {
+		record.WatchdogTaskID = watchdogTaskID
+		changed = true
+	}
+	if !changed {
+		return record, nil
+	}
+	s.sessions[sessionKey] = record
+	if err := s.persistLocked(); err != nil {
+		return record, err
+	}
+	return record, nil
+}
+
+// validateChatGPTConversationURL accepts only exact ChatGPT conversation URLs:
+// https://chatgpt.com/c/<non-empty id> or
+// https://chatgpt.com/g/<project id>/c/<conversation id>, default https port
+// only, no user info, no extra path segments, and no escaped delimiters.
+// Simple fixture ids such as "abc" are allowed; only the path shape is strict.
 func validateChatGPTConversationURL(raw string) error {
 	if raw == "" {
 		return errors.New("conversation_url is required")
@@ -336,20 +426,60 @@ func validateChatGPTConversationURL(raw string) error {
 	if err != nil {
 		return errors.New("conversation_url is invalid")
 	}
+	if parsed.User != nil {
+		return errors.New("conversation_url must not contain user info")
+	}
 	if !strings.EqualFold(parsed.Scheme, "https") || !strings.EqualFold(parsed.Hostname(), "chatgpt.com") {
 		return errors.New("conversation_url must be an https://chatgpt.com conversation URL")
 	}
-	path := strings.TrimSuffix(parsed.EscapedPath(), "/")
-	if !strings.Contains(path, "/c/") {
-		return errors.New("conversation_url must identify a ChatGPT conversation")
+	if parsed.Port() != "" && parsed.Port() != "443" {
+		return errors.New("conversation_url must use the default https port")
 	}
-	return nil
+	path := parsed.EscapedPath()
+	if strings.Contains(path, "%2f") || strings.Contains(path, "%2F") || strings.Contains(path, "%5c") || strings.Contains(path, "%5C") {
+		return errors.New("conversation_url path must not contain escaped delimiters")
+	}
+	segments := strings.Split(strings.Trim(path, "/"), "/")
+	switch len(segments) {
+	case 2: // /c/<id>
+		if strings.EqualFold(segments[0], "c") && validChatGPTConversationSegment(segments[1]) {
+			return nil
+		}
+	case 4: // /g/<project>/c/<id>
+		if strings.EqualFold(segments[0], "g") && strings.EqualFold(segments[2], "c") &&
+			validChatGPTConversationSegment(segments[1]) && validChatGPTConversationSegment(segments[3]) {
+			return nil
+		}
+	}
+	return errors.New("conversation_url must identify a ChatGPT conversation")
+}
+
+func validChatGPTConversationSegment(segment string) bool {
+	if segment == "" {
+		return false
+	}
+	for _, char := range segment {
+		if char <= 0x20 || char == '/' || char == '\\' || char == '%' {
+			return false
+		}
+	}
+	return true
 }
 
 func canonicalConversationURL(raw string) string {
 	parsed, err := url.Parse(strings.TrimSpace(raw))
 	if err != nil {
 		return strings.TrimSpace(raw)
+	}
+	parsed.Scheme = strings.ToLower(parsed.Scheme)
+	if hostname := parsed.Hostname(); hostname != "" {
+		// 与 dashboard canonical_chat_url 一致：默认 443 端口不保留，
+		// host/scheme 大小写归一。
+		host := strings.ToLower(hostname)
+		if port := parsed.Port(); port != "" && port != "443" {
+			host = host + ":" + port
+		}
+		parsed.Host = host
 	}
 	parsed.RawQuery = ""
 	parsed.Fragment = ""
@@ -472,6 +602,28 @@ func (r *Runtime) FinishMCPClientCall(info MCPClientContext, duration time.Durat
 		return publicMCPClientSession(record), err
 	}
 	return publicMCPClientSession(record), nil
+}
+
+// AutoBindMCPClientSession applies protocol-owned first-call auto binding from
+// MCP request metadata. It is idempotent for agreeing metadata (stable
+// bound_at) and rejects conflicting URL/task metadata before any business tool
+// side effect. Anonymous sessions without a valid conversation URL are never
+// bound and never fail the call.
+func (r *Runtime) AutoBindMCPClientSession(info MCPClientContext) error {
+	if r == nil || r.mcpSessions == nil {
+		return toolError(
+			"MCP_SESSION_AWARENESS_UNAVAILABLE",
+			"MCP session awareness is unavailable",
+			"runtime",
+		)
+	}
+	if _, err := r.mcpSessions.autoBind(info); err != nil {
+		if strings.HasPrefix(err.Error(), "binding conflict") {
+			return toolError("MCP_SESSION_BINDING_CONFLICT", err.Error(), "validation")
+		}
+		return toolError("MCP_SESSION_BINDING_FAILED", err.Error(), "runtime")
+	}
+	return nil
 }
 
 func (r *Runtime) mcpSessionCurrent(ctx context.Context, _ map[string]any) (Result, error) {

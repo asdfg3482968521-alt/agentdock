@@ -199,7 +199,19 @@ func (s *Server) callTool(ctx context.Context, name string, request *mcpsdk.Call
 			return nil, &sdkjsonrpc.Error{Code: sdkjsonrpc.CodeInvalidParams, Message: "tool arguments must be a JSON object"}
 		}
 	}
-	result, err := s.invokeTool(ctx, name, arguments, requestID, plane)
+	var result app.Result
+	var err error
+	// 首次调用自动绑定：协议元数据携带有效 conversation_url 时，
+	// 在同一调用内确定性绑定；与既有绑定冲突时在任何业务副作用前拒绝。
+	// 显式绑定工具（mcp_session_bind / agentdock_context）自行处理绑定。
+	if clientContext.SessionID != "" && s != nil && s.runtime != nil && name != "mcp_session_bind" && name != "agentdock_context" {
+		if bindErr := s.runtime.AutoBindMCPClientSession(clientContext); bindErr != nil {
+			err = bindErr
+		}
+	}
+	if err == nil {
+		result, err = s.invokeTool(ctx, name, arguments, requestID, plane)
+	}
 	callOK = err == nil
 	finishedAttrs := []any{"tool", name, "ok", err == nil, "ms", time.Since(started).Milliseconds()}
 	if sessionKey != "" {
@@ -226,14 +238,29 @@ func mcpClientContextFromRequest(request *mcpsdk.CallToolRequest) app.MCPClientC
 		return app.MCPClientContext{}
 	}
 	sessionID := ""
+	conversationURL := ""
+	conversationTitle := ""
+	watchdogTaskID := ""
 	if request.Params.Meta != nil {
 		if value, ok := request.Params.Meta["openai/session"].(string); ok {
 			sessionID = strings.TrimSpace(value)
 		}
+		if value, ok := request.Params.Meta["agentdock/conversation_url"].(string); ok {
+			conversationURL = strings.TrimSpace(value)
+		}
+		if value, ok := request.Params.Meta["agentdock/conversation_title"].(string); ok {
+			conversationTitle = strings.TrimSpace(value)
+		}
+		if value, ok := request.Params.Meta["agentdock/watchdog_task_id"].(string); ok {
+			watchdogTaskID = strings.TrimSpace(value)
+		}
 	}
 	info := app.MCPClientContext{
-		SessionID:       sessionID,
-		ProtocolVersion: strings.TrimSpace(request.ProtocolVersion()),
+		SessionID:         sessionID,
+		ProtocolVersion:   strings.TrimSpace(request.ProtocolVersion()),
+		ConversationURL:   conversationURL,
+		ConversationTitle: conversationTitle,
+		WatchdogTaskID:    watchdogTaskID,
 	}
 	if client := request.ClientInfo(); client != nil {
 		info.ClientName = strings.TrimSpace(client.Name)
@@ -263,7 +290,7 @@ func (s *Server) invokeTool(ctx context.Context, name string, arguments map[stri
 
 func toolRequestPlane(name string) string {
 	switch name {
-	case "server_info", "agentdock_context", "mcp_session_current", "mcp_session_bind", "mcp_manage", "mcp_tool_search", "mcp_tool_inspect":
+	case "server_info", "agentdock_context", "mcp_session_current", "mcp_session_bind", "mcp_session_control", "mcp_manage", "mcp_tool_search", "mcp_tool_inspect":
 		return "CONTROL_PLANE"
 	default:
 		return "EXECUTION_PLANE"

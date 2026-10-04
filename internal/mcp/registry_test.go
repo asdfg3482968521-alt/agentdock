@@ -115,8 +115,18 @@ func TestAgentDockContextSchemaIsModelFacingEntrypoint(t *testing.T) {
 	}
 
 	inputProps := schemaProperties(t, "agentdock_context")
-	if len(inputProps) != 0 {
-		t.Fatalf("agentdock_context input schema should not expose legacy refresh: %#v", inputProps)
+	if len(inputProps) != 4 {
+		t.Fatalf("agentdock_context input schema properties = %#v, want action/conversation_url/conversation_title/watchdog_task_id", inputProps)
+	}
+	for _, name := range []string{"action", "conversation_url", "conversation_title", "watchdog_task_id"} {
+		if _, ok := inputProps[name]; !ok {
+			t.Fatalf("agentdock_context input schema missing %s", name)
+		}
+	}
+	actionProp, _ := inputProps["action"].(map[string]any)
+	allowed, _ := actionProp["enum"].([]string)
+	if len(allowed) != 7 {
+		t.Fatalf("agentdock_context action enum = %#v", allowed)
 	}
 	outputProps, ok := outputSchema("agentdock_context")["properties"].(map[string]any)
 	if !ok {
@@ -125,19 +135,47 @@ func TestAgentDockContextSchemaIsModelFacingEntrypoint(t *testing.T) {
 	if _, ok := outputProps["context"]; !ok {
 		t.Fatal("agentdock_context output schema missing context")
 	}
-	if len(outputProps) != 1 {
-		t.Fatalf("agentdock_context output schema should expose only context: %#v", outputProps)
+	// 缓存客户端 schema 兼容：每个成功动作都返回 context（bootstrap 渲染、
+	// 其余为空串），因此 context 是必填的。
+	required, ok := outputSchema("agentdock_context")["required"].([]string)
+	if !ok || len(required) != 1 || required[0] != "context" {
+		t.Fatalf("agentdock_context output schema required = %#v, want [context]", required)
 	}
 	for _, name := range []string{"ok", "skills", "dynamic_mcp", "generated_at", "summary", "counts", "base_tools", "task_templates", "memory", "rules"} {
 		if _, ok := outputProps[name]; ok {
 			t.Fatalf("agentdock_context output schema should not expose non-context field %q", name)
 		}
 	}
-	required, ok := outputSchema("agentdock_context")["required"].([]string)
-	if !ok || len(required) != 1 || required[0] != "context" {
+
+}
+
+func TestAgentDockContextOutputSchemaCoversAllActions(t *testing.T) {
+	props, ok := outputSchema("agentdock_context")["properties"].(map[string]any)
+	if !ok {
+		t.Fatal("agentdock_context output schema properties missing")
+	}
+	// 每个成功动作都携带 context（bootstrap 渲染全文，其余为空串），
+	// 同时附加 session/state_file/watchdog。
+	required, _ := outputSchema("agentdock_context")["required"].([]string)
+	if len(required) != 1 || required[0] != "context" {
 		t.Fatalf("agentdock_context output schema required = %#v, want [context]", required)
 	}
-
+	for _, name := range []string{"context", "action", "session", "state_file", "watchdog"} {
+		if _, ok := props[name]; !ok {
+			t.Fatalf("agentdock_context output schema missing %q", name)
+		}
+	}
+	sessionProp, _ := props["session"].(map[string]any)
+	sessionProps, _ := sessionProp["properties"].(map[string]any)
+	for _, field := range []string{"session_key", "session_id_masked", "conversation_url", "conversation_title", "watchdog_task_id", "bound_at"} {
+		if _, ok := sessionProps[field]; !ok {
+			t.Fatalf("agentdock_context session output missing %q", field)
+		}
+	}
+	watchdogProp, _ := props["watchdog"].(map[string]any)
+	if watchdogProp["type"] != "object" {
+		t.Fatalf("agentdock_context watchdog output = %#v", watchdogProp)
+	}
 }
 
 func TestNexusDockRecallToolNamesHideLegacyMemoryTools(t *testing.T) {
