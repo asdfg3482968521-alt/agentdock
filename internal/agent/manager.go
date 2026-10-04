@@ -723,7 +723,6 @@ func (m *Manager) releaseRunLocked(managed *managedAgent) {
 	if m.activeSession[managed.record.SessionID] > 0 {
 		m.activeSession[managed.record.SessionID]--
 	}
-	managed.record.StartedAt = managed.record.StartedAt
 }
 
 func (m *Manager) Get(sessionID, agentID string) (Record, error) {

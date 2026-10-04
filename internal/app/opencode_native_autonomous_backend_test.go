@@ -153,6 +153,25 @@ func TestOpenCodeNativeAutonomousBackendPropagatesCancellation(t *testing.T) {
 	}
 }
 
+func TestD3NativeDefaultAndExplicitModels(t *testing.T) {
+	for _, tc := range []struct {
+		raw  string
+		want d3NativeModelRoute
+	}{
+		{"", d3NativeModelRoute{Provider: "jiyuan", Model: "deepseek-flash", Variant: "max"}},
+		{"default", d3NativeModelRoute{Provider: "jiyuan", Model: "deepseek-flash", Variant: "max"}},
+		{"jiyuan/deepseek-flash#low", d3NativeModelRoute{Provider: "jiyuan", Model: "deepseek-flash", Variant: "low"}},
+		{"jiyuan/deepseek-flash#high", d3NativeModelRoute{Provider: "jiyuan", Model: "deepseek-flash", Variant: "high"}},
+		{"jiyuan/glm-5.3-flash#high", d3NativeModelRoute{Provider: "jiyuan", Model: "glm-5.3-flash", Variant: "high"}},
+		{"opencode/custom-model#low", d3NativeModelRoute{Provider: "opencode", Model: "custom-model", Variant: "low"}},
+	} {
+		got, err := parseD3NativeModelRoute(tc.raw)
+		if err != nil || got != tc.want {
+			t.Fatalf("parseD3NativeModelRoute(%q)=%+v err=%v want=%+v", tc.raw, got, err, tc.want)
+		}
+	}
+}
+
 func TestD3G1RuntimeBackendRegistrationAndConcurrency(t *testing.T) {
 	runner := &fakeD3G1AutonomousRunner{}
 	backends := map[string]agentruntime.AgentBackend{"opencode": newOpenCodeBackend(&fakeC25OpenCodeWorker{})}
