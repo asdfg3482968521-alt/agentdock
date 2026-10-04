@@ -1,0 +1,71 @@
+name: Session Awareness Windows Build
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - feature/chatgpt-session-awareness-20261004
+    paths:
+      - '.github/workflows/session-awareness-build.yml'
+      - 'cmd/agentdock/**'
+      - 'internal/**'
+      - 'go.mod'
+      - 'go.sum'
+
+permissions:
+  contents: read
+
+jobs:
+  build-windows-amd64:
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Test
+        shell: pwsh
+        run: |
+          $env:AGENTDOCK_OPENCODE_PROJECT_ROOT = $null
+          go test ./...
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Build Windows amd64
+        shell: pwsh
+        env:
+          CGO_ENABLED: '0'
+          GOOS: windows
+          GOARCH: amd64
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $commit = (git rev-parse HEAD).Trim()
+          $buildDate = (Get-Date).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ')
+          New-Item -ItemType Directory -Force dist | Out-Null
+          $ldflags = "-s -w -X github.com/uvwt/agentdock/internal/buildinfo.Commit=$commit -X github.com/uvwt/agentdock/internal/buildinfo.BuildDate=$buildDate"
+          go build -trimpath -ldflags $ldflags -o dist\agentdock.exe .\cmd\agentdock
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          .\dist\agentdock.exe --version | Tee-Object -FilePath dist\VERSION.txt
+          $hash = (Get-FileHash dist\agentdock.exe -Algorithm SHA256).Hash.ToLowerInvariant()
+          "$hash  agentdock.exe" | Set-Content -Encoding ascii dist\SHA256SUMS.txt
+          @(
+            "branch=${{ github.ref_name }}"
+            "commit=$commit"
+            "build_date=$buildDate"
+            "go_version=$(go version)"
+            "goos=windows"
+            "goarch=amd64"
+          ) | Set-Content -Encoding utf8 dist\BUILDINFO.txt
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: agentdock-session-awareness-windows-amd64
+          path: dist/
+          if-no-files-found: error
+          retention-days: 14
