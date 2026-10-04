@@ -13,7 +13,7 @@ import (
 
 const (
 	d3NativeAutonomousProvider     = "opencode-native"
-	d3NativeAutonomousDefaultModel = "mimo-v2.5-free"
+	d3NativeAutonomousDefaultModel = "jiyuan/deepseek-flash#max"
 )
 
 type d3NativeAutonomousRunner interface {

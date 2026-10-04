@@ -106,7 +106,7 @@ func TestD3G1RealWindowsProductionABCPoolGate(t *testing.T) {
 		if binding.RuntimeScope != "session:"+record.SessionID || binding.PermissionMode != "project" {
 			t.Fatalf("%s runtime authority mismatch binding=%+v", label, binding)
 		}
-		if binding.Provider != "opencode" || binding.Model != d3NativeAutonomousDefaultModel || binding.ExecutionMode != opencodeautonomous.ExecutionModeAutonomous {
+		if binding.Provider != "jiyuan" || binding.Model != "deepseek-flash" || binding.Variant != "max" || binding.ExecutionMode != opencodeautonomous.ExecutionModeAutonomous {
 			t.Fatalf("%s native identity mismatch binding=%+v", label, binding)
 		}
 		if seenWorkspace[binding.Workspace] || seenRuntimeScope[binding.RuntimeScope] {
@@ -215,8 +215,9 @@ func TestD3G1RealWindowsProductionABCPoolGate(t *testing.T) {
 		ClientRequestID:    agents["A"],
 		SubagentID:         agents["A"],
 		Workspace:          sessions["A"].Workspace(),
-		Provider:           "opencode",
-		Model:              d3NativeAutonomousDefaultModel,
+		Provider:           "jiyuan",
+		Model:              "deepseek-flash",
+		Variant:            "max",
 		ExecutionMode:      opencodeautonomous.ExecutionModeAutonomous,
 	})
 	if err != nil || duplicateA.OpenCodeSessionID != bindings["A"].OpenCodeSessionID {
@@ -307,8 +308,9 @@ func TestD3G1RealWindowsProductionABCPoolGate(t *testing.T) {
 			ClientRequestID:    agents[label],
 			SubagentID:         agents[label],
 			Workspace:          sessions[label].Workspace(),
-			Provider:           "opencode",
-			Model:              d3NativeAutonomousDefaultModel,
+			Provider:           "jiyuan",
+			Model:              "deepseek-flash",
+			Variant:            "max",
 			ExecutionMode:      opencodeautonomous.ExecutionModeAutonomous,
 		})
 		if startErr != nil || duplicate.OpenCodeSessionID != bindings[label].OpenCodeSessionID {

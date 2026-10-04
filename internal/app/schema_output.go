@@ -210,6 +210,7 @@ func OutputSchema(name string) map[string]any {
 		props["opencode_manifest"] = stringProp("Configured verified OpenCode runtime manifest path.")
 		props["opencode_runtimes"] = arrayProp("Current workspace-bound OpenCode runtime summaries.")
 		props["opencode_tools"] = map[string]any{"type": "array", "items": map[string]any{"type": "string"}}
+		props["opencode_native_default_model"] = stringProp("Default native subagent route when model is omitted; explicit model selections are preserved.")
 		props["trusted_proxy_cidrs"] = map[string]any{"type": "array", "items": map[string]any{"type": "string"}}
 		props["auth_enabled"] = boolProp("Whether MCP authentication is required.")
 		props["endpoint_path"] = stringProp("HTTP path used by the MCP endpoint.")
