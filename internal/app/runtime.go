@@ -55,6 +55,7 @@ type Runtime struct {
 	skills           *toolskill.Service
 	mcpClients       *mcpclient.Manager
 	mcpSessions      *MCPClientSessionStore
+	watchdog         *watchdogClient
 	tasks            *taskstate.Store
 	command          *toolcommand.Service
 	files            *toolfile.Service
@@ -116,6 +117,12 @@ func NewRuntime(cfg config.Config) (*Runtime, error) {
 		runtime.recordStartupIssue("mcp_session_awareness", mcpSessionErr)
 	} else {
 		runtime.mcpSessions = mcpSessions
+	}
+	watchdog, watchdogErr := newWatchdogClient(cfg.WatchdogDashboardURL)
+	if watchdogErr != nil {
+		runtime.recordStartupIssue("watchdog_dashboard", watchdogErr)
+	} else {
+		runtime.watchdog = watchdog
 	}
 
 	// Everything below this point is optional to the HTTP/MCP control plane.
@@ -342,6 +349,7 @@ func (r *Runtime) subsystemStatus() map[string]any {
 		"dynamic_mcp":           r.dynamicMCP != nil,
 		"browser":               r.browser != nil,
 		"mcp_session_awareness": r.mcpSessions != nil,
+		"watchdog_dashboard":    r.watchdog != nil,
 	}
 }
 
@@ -561,8 +569,13 @@ func (r *Runtime) serverInfo() Result {
 			}
 			return r.mcpSessions.ActivityLogPath()
 		}(),
-		"tools":      names,
-		"tool_count": len(names),
+		// 会话引导/控制能力清单：客户端据此检测支持，而不是猜测参数。
+		"session_bootstrap_actions":   []string{"bootstrap", "status", "bind", "pause", "interrupt", "resume", "abort"},
+		"mcp_session_control_actions": []string{"status", "pause", "interrupt", "resume", "abort"},
+		"watchdog_dashboard_url":      r.cfg.WatchdogDashboardURL,
+		"watchdog_dashboard_enabled":  r.watchdog != nil,
+		"tools":                       names,
+		"tool_count":                  len(names),
 	}
 }
 

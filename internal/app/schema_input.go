@@ -104,6 +104,10 @@ func InputSchema(name string) map[string]any {
 		props["max_bytes"] = boundedIntProp("Maximum output bytes. Defaults to 262144 and is capped at 4194304.", 1, toolfile.MaxTextOutputBytes)
 		required = []string{"path"}
 	case "agentdock_context":
+		props["action"] = map[string]any{"type": "string", "enum": []string{"bootstrap", "status", "bind", "pause", "interrupt", "resume", "abort"}, "default": "bootstrap", "description": "Session bootstrap action. bootstrap returns context and binds the conversation when available; status reads the current binding; bind rebinds explicitly; pause/interrupt/resume/abort control the Watchdog task bound to this conversation."}
+		props["conversation_url"] = map[string]any{"type": "string", "minLength": 1, "maxLength": 2048, "description": "Current ChatGPT conversation URL used by bootstrap fallback or bind. Session identity still comes from protocol metadata and cannot be forged here."}
+		props["conversation_title"] = map[string]any{"type": "string", "maxLength": 512, "description": "Optional human-readable ChatGPT conversation title."}
+		props["watchdog_task_id"] = map[string]any{"type": "string", "maxLength": 128, "description": "Optional ChatGPT Watchdog task id associated with this conversation."}
 
 	case "mcp_session_current":
 
@@ -112,6 +116,9 @@ func InputSchema(name string) map[string]any {
 		props["conversation_title"] = map[string]any{"type": "string", "maxLength": 512, "description": "Optional human-readable ChatGPT conversation title."}
 		props["watchdog_task_id"] = map[string]any{"type": "string", "maxLength": 128, "description": "Optional ChatGPT Watchdog task id associated with this conversation."}
 		required = []string{"conversation_url"}
+	case "mcp_session_control":
+		props["action"] = map[string]any{"type": "string", "enum": []string{"status", "pause", "interrupt", "resume", "abort"}, "description": "Watchdog control action. status reads the current binding and task state; pause pauses after the current reply; interrupt pauses immediately; resume resumes a paused or resumable task; abort terminates it. The target is always the caller's exact bound conversation."}
+		required = []string{"action"}
 	case "list_dir":
 		props["path"] = stringProp(toolfile.PathDescription("Host directory path. Relative paths resolve from ~/AgentDock."))
 		toolfile.AddRuntimeProperties(props)
@@ -483,7 +490,7 @@ func InputSchema(name string) map[string]any {
 		}
 	}
 	switch name {
-	case "opencode_bash", "opencode_read", "opencode_glob", "opencode_grep", "opencode_edit", "opencode_write", "opencode_apply_patch", "opencode_lsp", "opencode_git", "job_start", "job_status", "job_output", "job_cancel", "job_list", "session_open", "session_status", "session_list", "session_close", "agent_supervisor_message", "agent_supervisor_observe", "agent_supervisor_correct", "exec_command", "acp_session", "acp_prompt", "acp_interaction", "recall_bootstrap", "recall_search", "recall_read", "recall_write", "recall_maintain", "private_note_manage", "mcp_manage", "mcp_tool_search", "mcp_tool_inspect", "mcp_tool_call", "mcp_session_current", "mcp_session_bind", "browser_session", "browser_act", "browser_snapshot":
+	case "opencode_bash", "opencode_read", "opencode_glob", "opencode_grep", "opencode_edit", "opencode_write", "opencode_apply_patch", "opencode_lsp", "opencode_git", "job_start", "job_status", "job_output", "job_cancel", "job_list", "session_open", "session_status", "session_list", "session_close", "agent_supervisor_message", "agent_supervisor_observe", "agent_supervisor_correct", "exec_command", "acp_session", "acp_prompt", "acp_interaction", "recall_bootstrap", "recall_search", "recall_read", "recall_write", "recall_maintain", "private_note_manage", "mcp_manage", "mcp_tool_search", "mcp_tool_inspect", "mcp_tool_call", "mcp_session_current", "mcp_session_bind", "mcp_session_control", "browser_session", "browser_act", "browser_snapshot":
 		// 这些工具的参数契约需要严格收敛，避免删除或拼错的字段被静默忽略。
 		schema["additionalProperties"] = false
 	}
