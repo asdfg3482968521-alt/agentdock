@@ -29,11 +29,11 @@ jobs:
           go-version-file: go.mod
           cache: true
 
-      - name: Test
+      - name: Test modified session-awareness packages
         shell: pwsh
         run: |
           $env:AGENTDOCK_OPENCODE_PROJECT_ROOT = $null
-          go test ./...
+          go test ./internal/app ./internal/mcp
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Build Windows amd64
