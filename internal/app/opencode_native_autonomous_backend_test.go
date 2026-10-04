@@ -43,6 +43,9 @@ func TestOpenCodeNativeAutonomousBackendMetadataAndModel(t *testing.T) {
 	if metadata.BackendIdentity() != agentruntime.BackendIdentityOpenCode || metadata.RequiresCredential() {
 		t.Fatalf("metadata identity=%q requires_credential=%v", metadata.BackendIdentity(), metadata.RequiresCredential())
 	}
+	if d3NativeAutonomousDefaultModel != "jiyuan/deepseek-flash#max" {
+		t.Fatalf("unexpected native default model: %q", d3NativeAutonomousDefaultModel)
+	}
 	for raw, want := range map[string]string{"": d3NativeAutonomousDefaultModel, "default": d3NativeAutonomousDefaultModel, "custom-model": "custom-model", "jiyuan/deepseek-flash#low": "jiyuan/deepseek-flash#low"} {
 		got, err := backend.ResolveModel(raw)
 		if err != nil || got != want {
@@ -92,7 +95,7 @@ func TestOpenCodeNativeAutonomousBackendMapsAgentRequestAndTelemetry(t *testing.
 	runner := &fakeD3G1AutonomousRunner{
 		telemetry: []opencodeautonomous.TelemetryEvent{{EventID: "evt-1", Cursor: 3, SessionID: "native-root-a", Tool: "read", CallID: "call-1", Status: "completed"}},
 		result: opencodeautonomous.Result{
-			SubagentID: "agent-a", RootOpenCodeSessionID: "native-root-a", Provider: "opencode", Model: d3NativeAutonomousDefaultModel,
+			SubagentID: "agent-a", RootOpenCodeSessionID: "native-root-a", Provider: "jiyuan", Model: "deepseek-flash", Variant: "max",
 			FinalText: "D3 G1 autonomous result", AutonomousToolSteps: 1,
 		},
 	}
@@ -113,7 +116,7 @@ func TestOpenCodeNativeAutonomousBackendMapsAgentRequestAndTelemetry(t *testing.
 	if runner.request.AgentID != "agent-a" || runner.request.AgentDockSessionID != "session-a" || runner.request.Workspace != `C:\work\A` {
 		t.Fatalf("identity mapping=%+v", runner.request)
 	}
-	if runner.request.PermissionMode != "project" || runner.request.Provider != "opencode" || runner.request.Model != d3NativeAutonomousDefaultModel {
+	if runner.request.PermissionMode != "project" || runner.request.Provider != "jiyuan" || runner.request.Model != "deepseek-flash" || runner.request.Variant != "max" {
 		t.Fatalf("authority/model mapping=%+v", runner.request)
 	}
 	if runner.request.Task != "Solve the high-level task autonomously." || runner.request.Timeout != 45*time.Second {

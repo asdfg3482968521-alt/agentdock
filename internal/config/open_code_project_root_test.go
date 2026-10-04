@@ -30,6 +30,7 @@ func TestOpenCodeProjectRootNormalizesAndCreatesDirectory(t *testing.T) {
 func TestOpenCodeProjectRootFallsBackToHomeOpenCode(t *testing.T) {
 	home := t.TempDir()
 	setTestUserHome(t, home)
+	t.Setenv("AGENTDOCK_OPENCODE_PROJECT_ROOT", "")
 	cfg, err := FromEnv()
 	if err != nil {
 		t.Fatal(err)
