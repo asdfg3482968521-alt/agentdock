@@ -39,6 +39,14 @@ func TestMCPClientSessionStoreTracksBindsAndMasksIdentity(t *testing.T) {
 	if record.ActiveCalls != 0 || record.LastDurationMS < 100 || !record.LastOK || record.LastFinishedAt == "" {
 		t.Fatalf("finished record = %#v", record)
 	}
+	logBytes, err := os.ReadFile(filepath.Join(root, mcpClientActivityLogFileName))
+	if err != nil {
+		t.Fatal(err)
+	}
+	logText := string(logBytes)
+	if !strings.Contains(logText, record.SessionKey+" | server_info | OK |") || strings.Contains(logText, info.SessionID) {
+		t.Fatalf("activity log = %q", logText)
+	}
 	if record.SessionKey == "" || strings.Contains(record.SessionKey, info.SessionID) {
 		t.Fatalf("session key must be stable and non-secret: %q", record.SessionKey)
 	}

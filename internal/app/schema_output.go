@@ -215,6 +215,7 @@ func OutputSchema(name string) map[string]any {
 		props["endpoint_path"] = stringProp("HTTP path used by the MCP endpoint.")
 		props["mcp_session_awareness"] = boolProp("Whether protocol-owned MCP client session tracking is available.")
 		props["mcp_session_state_file"] = stringProp("Local JSON state file containing MCP client session activity and bindings.")
+		props["mcp_call_log_file"] = stringProp("Compact one-line MCP call activity log.")
 	case "agentdock_context":
 		required = []string{"context"}
 		props["context"] = stringProp("Rendered AgentDock bootstrap context text for clients that cannot inject system prompt context.")

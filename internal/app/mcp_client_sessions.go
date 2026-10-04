@@ -21,6 +21,7 @@ import (
 const (
 	mcpClientSessionStateVersion = 1
 	mcpClientSessionFileName     = "mcp-client-sessions.json"
+	mcpClientActivityLogFileName = "mcp-call.log"
 )
 
 type mcpClientContextKey struct{}
@@ -97,6 +98,7 @@ type mcpClientSessionState struct {
 type MCPClientSessionStore struct {
 	mu       sync.Mutex
 	path     string
+	logPath  string
 	sessions map[string]MCPClientSessionRecord
 }
 
@@ -107,6 +109,7 @@ func newMCPClientSessionStore(agentDockHome string) (*MCPClientSessionStore, err
 	}
 	store := &MCPClientSessionStore{
 		path:     filepath.Join(home, mcpClientSessionFileName),
+		logPath:  filepath.Join(home, mcpClientActivityLogFileName),
 		sessions: map[string]MCPClientSessionRecord{},
 	}
 	data, err := os.ReadFile(store.path)
@@ -159,6 +162,13 @@ func (s *MCPClientSessionStore) Path() string {
 		return ""
 	}
 	return s.path
+}
+
+func (s *MCPClientSessionStore) ActivityLogPath() string {
+	if s == nil {
+		return ""
+	}
+	return s.logPath
 }
 
 func (s *MCPClientSessionStore) record(info MCPClientContext, tool, requestID string) (MCPClientSessionRecord, error) {
@@ -232,7 +242,42 @@ func (s *MCPClientSessionStore) finish(sessionID string, duration time.Duration,
 	if err := s.persistLocked(); err != nil {
 		return record, err
 	}
+	if err := s.appendActivityLogLocked(record); err != nil {
+		return record, err
+	}
 	return record, nil
+}
+
+func (s *MCPClientSessionStore) appendActivityLogLocked(record MCPClientSessionRecord) error {
+	status := "OK"
+	if !record.LastOK {
+		status = "ERR"
+	}
+	label := strings.TrimSpace(record.ConversationTitle)
+	if label == "" {
+		label = strings.TrimSpace(record.WatchdogTaskID)
+	}
+	if label == "" {
+		label = "-"
+	}
+	line := fmt.Sprintf(
+		"%s | %s | %s | %s | %dms | %s\n",
+		time.Now().UTC().Format(time.RFC3339),
+		record.SessionKey,
+		record.LastTool,
+		status,
+		record.LastDurationMS,
+		label,
+	)
+	file, err := os.OpenFile(s.logPath, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o600)
+	if err != nil {
+		return fmt.Errorf("open MCP activity log: %w", err)
+	}
+	defer file.Close()
+	if _, err := file.WriteString(line); err != nil {
+		return fmt.Errorf("append MCP activity log: %w", err)
+	}
+	return nil
 }
 
 func (s *MCPClientSessionStore) bind(sessionID, conversationURL, conversationTitle, watchdogTaskID string) (MCPClientSessionRecord, error) {

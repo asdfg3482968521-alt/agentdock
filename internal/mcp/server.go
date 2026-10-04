@@ -191,25 +191,24 @@ func (s *Server) callTool(ctx context.Context, name string, request *mcpsdk.Call
 	arguments := map[string]any{}
 	if request != nil && request.Params != nil && len(request.Params.Arguments) > 0 && string(request.Params.Arguments) != "null" {
 		if err := json.Unmarshal(request.Params.Arguments, &arguments); err != nil {
-			slog.Warn("tool params invalid", "request_id", requestID, "server_instance", s.instanceID, "tool", name, "plane", plane, "duration_ms", time.Since(started).Milliseconds())
+			attrs := []any{"tool", name}
+			if sessionKey != "" {
+				attrs = append(attrs, "session", sessionKey)
+			}
+			slog.Warn("MCP invalid params", attrs...)
 			return nil, &sdkjsonrpc.Error{Code: sdkjsonrpc.CodeInvalidParams, Message: "tool arguments must be a JSON object"}
 		}
 	}
-	startedAttrs := []any{"request_id", requestID, "server_instance", s.instanceID, "tool", name, "plane", plane}
-	if sessionKey != "" {
-		startedAttrs = append(startedAttrs, "mcp_session_key", sessionKey)
-	}
-	slog.Info("tool started", startedAttrs...)
 	result, err := s.invokeTool(ctx, name, arguments, requestID, plane)
 	callOK = err == nil
-	finishedAttrs := []any{"request_id", requestID, "server_instance", s.instanceID, "tool", name, "plane", plane, "duration_ms", time.Since(started).Milliseconds(), "ok", err == nil}
+	finishedAttrs := []any{"tool", name, "ok", err == nil, "ms", time.Since(started).Milliseconds()}
 	if sessionKey != "" {
-		finishedAttrs = append(finishedAttrs, "mcp_session_key", sessionKey)
+		finishedAttrs = append(finishedAttrs, "session", sessionKey)
 	}
 	if err != nil {
-		finishedAttrs = append(finishedAttrs, "error", err)
+		finishedAttrs = append(finishedAttrs, "request", requestID, "error", err)
 	}
-	slog.Info("tool finished", finishedAttrs...)
+	slog.Info("MCP tool", finishedAttrs...)
 
 	encoded, encodeErr := json.Marshal(toolEnvelope(name, result, err))
 	if encodeErr != nil {

@@ -555,6 +555,12 @@ func (r *Runtime) serverInfo() Result {
 			}
 			return r.mcpSessions.Path()
 		}(),
+		"mcp_call_log_file": func() string {
+			if r.mcpSessions == nil {
+				return ""
+			}
+			return r.mcpSessions.ActivityLogPath()
+		}(),
 		"tools":      names,
 		"tool_count": len(names),
 	}
