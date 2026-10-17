@@ -57,6 +57,7 @@ if ($Mode -eq "stop") {
     $state = Read-State
     if ($state) { Kill-Owned ([int]$state.agent_pid) "agentdock"; Kill-Owned ([int]$state.ngrok_pid) "ngrok" }
     try { Stop-ScheduledTask -TaskName "AgentDock Personal Launcher" -ErrorAction SilentlyContinue } catch {}
+    Write-State "STOPPED" "" 0 0 "Stopped by user."
     Log "User requested stop."
     exit 0
 }
@@ -76,6 +77,11 @@ $env:AGENTDOCK_HOST = "127.0.0.1"
 $env:AGENTDOCK_PORT = [string]$cfg.port
 $env:AGENTDOCK_HOME = [string]$cfg.home_path
 $env:AGENTDOCK_DEFAULT_DIR = [string]$cfg.workspace_path
+$env:AGENTDOCK_OPENCODE_ENABLED = if ($cfg.opencode_manifest) { "true" } else { "false" }
+$env:AGENTDOCK_OPENCODE_RUNTIME_MANIFEST = [string]$cfg.opencode_manifest
+$env:AGENTDOCK_D3_NATIVE_URL = [string]$cfg.native_url
+$env:AGENTDOCK_OPENCODE_PROJECT_ROOT = [string]$cfg.opencode_project_root
+$env:AGENTDOCK_WATCHDOG_DASHBOARD_URL = [string]$cfg.watchdog_url
 $env:AGENTDOCK_OAUTH_ACCESS_TOKEN_TTL = "1h"
 $env:AGENTDOCK_OAUTH_ENABLED = "false"
 $env:AGENTDOCK_OAUTH_REQUIRED = "false"
