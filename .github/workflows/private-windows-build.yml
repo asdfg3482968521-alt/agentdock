@@ -1,10 +1,9 @@
-name: Personal Windows Launcher Build
+name: Personal Windows One-Click Package
 on:
   workflow_dispatch:
   push:
     branches:
       - main
-      - integration/latest-launcher-20261017
     paths:
       - 'cmd/**'
       - 'internal/**'
@@ -12,37 +11,114 @@ on:
       - 'go.sum'
       - 'scripts/windows/**'
       - 'Start-AgentDock.cmd'
+      - 'docs/windows-one-click.md'
       - '.github/workflows/private-windows-build.yml'
+
+concurrency:
+  group: personal-windows-package
+  cancel-in-progress: false
 
 jobs:
   windows-package:
     runs-on: windows-latest
+    timeout-minutes: 30
     permissions:
-      contents: read
+      contents: write
     steps:
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: true
       - uses: actions/setup-go@v6
         with:
           go-version-file: go.mod
           cache: true
-      - name: Run Go unit tests
+      - name: Verify PowerShell syntax
         shell: pwsh
-        run: go test ./...
-      - name: Build personal Windows package
+        run: |
+          $ErrorActionPreference = "Stop"
+          Get-ChildItem scripts/windows -Filter 'AgentDock.*.ps1' | ForEach-Object {
+            $errors = $null
+            $tokens = $null
+            [void][System.Management.Automation.Language.Parser]::ParseFile($_.FullName, [ref]$tokens, [ref]$errors)
+            if ($errors.Count -gt 0) { throw "PowerShell syntax errors in $($_.Name): $errors" }
+          }
+      - name: Build Windows executable and one-click ZIP
         shell: pwsh
         run: |
           $ErrorActionPreference = "Stop"
           New-Item -ItemType Directory -Force -Path dist/scripts/windows,dist/docs | Out-Null
-          $sha = (git rev-parse --short=12 HEAD).Trim()
+          $shortSha = (git rev-parse --short=12 HEAD).Trim()
           $built = (Get-Date).ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ssZ")
-          $ldflags = "-X github.com/uvwt/agentdock/internal/buildinfo.Commit=$sha -X github.com/uvwt/agentdock/internal/buildinfo.BuildDate=$built"
+          $ldflags = "-X github.com/uvwt/agentdock/internal/buildinfo.Commit=$shortSha -X github.com/uvwt/agentdock/internal/buildinfo.BuildDate=$built"
           go build -trimpath -ldflags "$ldflags" -o dist/agentdock.exe ./cmd/agentdock
+          if ($LASTEXITCODE -ne 0) { throw "Go build failed" }
+          & ./dist/agentdock.exe --version
+          if ($LASTEXITCODE -ne 0) { throw "Built binary version check failed" }
           Copy-Item Start-AgentDock.cmd dist/Start-AgentDock.cmd
           Copy-Item scripts/windows/AgentDock.*.ps1 dist/scripts/windows/
           Copy-Item docs/windows-one-click.md dist/docs/windows-one-click.md
-          Get-FileHash dist/agentdock.exe -Algorithm SHA256 | Select-Object Hash | ConvertTo-Json | Set-Content dist/agentdock.exe.sha256.json
-      - uses: actions/upload-artifact@v4
+          $sha = (Get-FileHash dist/agentdock.exe -Algorithm SHA256).Hash.ToLowerInvariant()
+          "$sha  agentdock.exe" | Set-Content dist/SHA256SUMS.txt -Encoding ascii
+          $package = Join-Path $env:RUNNER_TEMP 'AgentDock-OneClick-Windows.zip'
+          if (Test-Path $package) { Remove-Item $package -Force }
+          Compress-Archive -Path dist/* -DestinationPath $package -CompressionLevel Optimal
+          if (-not (Test-Path $package)) { throw "No Windows ZIP package generated" }
+          $zip = [IO.Compression.ZipFile]::OpenRead($package)
+          try {
+            $entries = @($zip.Entries | ForEach-Object FullName)
+            foreach ($required in @("agentdock.exe", "Start-AgentDock.cmd", "scripts/windows/AgentDock.Launcher.ps1", "scripts/windows/AgentDock.Runtime.ps1", "docs/windows-one-click.md")) {
+              if ($required -notin $entries) { throw "ZIP missing required entry: $required" }
+            }
+          } finally { $zip.Dispose() }
+          Write-Host "Package created: $package ($((Get-Item $package).Length) bytes)"
+      - name: Upload GitHub Actions backup artifact
+        uses: actions/upload-artifact@v4
         with:
           name: agentdock-personal-windows
-          path: dist/
-          retention-days: 30
+          path: ${{ runner.temp }}/AgentDock-OneClick-Windows.zip
+          retention-days: 90
+          if-no-files-found: error
+      - name: Publish downloadable ZIP into download/windows-latest branch
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $ErrorActionPreference = "Stop"
+          $sourceSha = $env:GITHUB_SHA
+          $zipPath = Join-Path $env:RUNNER_TEMP 'AgentDock-OneClick-Windows.zip'
+          $zipHash = (Get-FileHash $zipPath -Algorithm SHA256).Hash.ToLowerInvariant()
+          git fetch origin refs/heads/download/windows-latest:refs/remotes/origin/download/windows-latest
+          if ($LASTEXITCODE -ne 0) { throw "Missing download/windows-latest branch" }
+          git switch -C download/windows-latest origin/download/windows-latest
+          if ($LASTEXITCODE -ne 0) { throw "Cannot switch to download branch" }
+          New-Item -ItemType Directory -Force -Path downloads | Out-Null
+          Copy-Item -LiteralPath $zipPath -Destination downloads/AgentDock-OneClick-Windows.zip -Force
+          "$zipHash  AgentDock-OneClick-Windows.zip" | Set-Content downloads/SHA256SUMS.txt -Encoding ascii
+          @(
+            "AgentDock Personal Windows One-Click Bundle"
+            "Built from private source commit: $sourceSha"
+            "Contents: agentdock.exe, Start-AgentDock.cmd, Windows Forms launcher, runtime supervisor, guide."
+            "Unzip and double-click Start-AgentDock.cmd. Requires Windows 10/11 and PowerShell 5.1."
+            "The download/windows-latest branch contains a rolling package; full source lives on main."
+          ) | Set-Content downloads/README.txt -Encoding utf8
+          git add -f downloads/AgentDock-OneClick-Windows.zip downloads/SHA256SUMS.txt downloads/README.txt
+          git -c user.name="github-actions[bot]" -c user.email="41898282+github-actions[bot]@users.noreply.github.com" commit -m "build(windows): publish one-click package for $sourceSha"
+          if ($LASTEXITCODE -ne 0) { throw "Unable to commit downloadable package" }
+          git push origin HEAD:refs/heads/download/windows-latest
+          if ($LASTEXITCODE -ne 0) { throw "Unable to publish download branch" }
+      - name: Publish direct-download GitHub Release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $ErrorActionPreference = "Stop"
+          $repo = $env:GITHUB_REPOSITORY
+          $tag = "agentdock-personal-latest"
+          $asset = Join-Path $env:RUNNER_TEMP "AgentDock-OneClick-Windows.zip"
+          gh release view $tag --repo $repo *> $null
+          if ($LASTEXITCODE -eq 0) {
+            gh release upload $tag $asset --clobber --repo $repo
+          } else {
+            gh release create $tag $asset --repo $repo --target $env:GITHUB_SHA --title "AgentDock Personal Windows One-Click" --notes "Private Windows one-click launcher bundle. Download AgentDock-OneClick-Windows.zip, extract and double-click Start-AgentDock.cmd. The source is maintained on the main branch."
+          }
+          if ($LASTEXITCODE -ne 0) { throw "GitHub Release upload failed" }
