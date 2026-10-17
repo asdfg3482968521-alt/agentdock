@@ -75,7 +75,7 @@ jobs:
       - name: Publish standalone desktop Setup EXE as GitHub Release
         shell: pwsh
         env:
-          GH_TOKEN: \${{ github.token }}
+          GH_TOKEN: ${{ github.token }}
         run: |
           $ErrorActionPreference = 'Stop'
           $tag = 'agentdock-desktop-latest'
