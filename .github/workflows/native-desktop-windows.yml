@@ -1,0 +1,92 @@
+name: Native Windows Desktop GUI Setup
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - 'desktop/windows/**'
+      - 'packaging/windows/**'
+      - 'internal/**'
+      - 'cmd/**'
+      - 'scripts/install/**'
+      - 'go.mod'
+      - 'go.sum'
+      - '.github/workflows/native-desktop-windows.yml'
+permissions:
+  contents: write
+concurrency:
+  group: desktop-setup
+  cancel-in-progress: false
+jobs:
+  build:
+    runs-on: windows-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          cache: true
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+      - name: Build AgentDock and original WPF desktop GUI
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $env:CGO_ENABLED = '0'
+          $env:GOOS = 'windows'
+          $env:GOARCH = 'amd64'
+          New-Item -ItemType Directory -Force -Path dist,dist/control-panel | Out-Null
+          $sha = (git rev-parse --short=12 HEAD).Trim()
+          $date = (Get-Date).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ')
+          $flags = "-X github.com/uvwt/agentdock/internal/buildinfo.Commit=$sha -X github.com/uvwt/agentdock/internal/buildinfo.BuildDate=$date"
+          go build -trimpath -ldflags "$flags" -o dist/agentdock.exe ./cmd/agentdock
+          if ($LASTEXITCODE -ne 0) { throw 'Go build failed' }
+          dotnet publish ./desktop/windows/control-panel/AgentDock.ControlPanel.csproj -c Release -r win-x64 --self-contained true -o dist/control-panel
+          if ($LASTEXITCODE -ne 0) { throw 'WPF publish failed' }
+          $tray = 'dist/control-panel/agentdock-tray.exe'
+          if (-not (Test-Path $tray) -or (Get-Item $tray).Length -lt 20MB) { throw 'Original WPF GUI was not built correctly' }
+          Copy-Item $tray dist/agentdock-tray.exe
+          Copy-Item ./scripts/install/manage-windows.ps1 dist/manage-windows.ps1
+          Copy-Item ./packaging/windows/assets/agentdock.ico dist/agentdock.ico
+          python ./packaging/build-core-skill-bundle.py --output dist/share/agentdock/core-skills
+          if ($LASTEXITCODE -ne 0) { throw 'Failed to build bundled skills' }
+          Write-Host "Original WPF GUI size: $((Get-Item $tray).Length) bytes"
+      - name: Create offline native installer with signed Cloudflare binary
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          New-Item -ItemType Directory -Force -Path dist/offline,dist/setup | Out-Null
+          $zip = (Resolve-Path dist/offline).Path + '\agentdock_windows_amd64.zip'
+          Compress-Archive -Path dist/agentdock.exe,dist/agentdock-tray.exe,dist/agentdock.ico,dist/manage-windows.ps1,dist/share -DestinationPath $zip -CompressionLevel Optimal
+          $zipHash = (Get-FileHash $zip -Algorithm SHA256).Hash.ToLowerInvariant()
+          [IO.File]::WriteAllText("$zip.sha256","$zipHash  agentdock_windows_amd64.zip" + [Environment]::NewLine,[Text.UTF8Encoding]::new($false))
+          $cloudflared = (Resolve-Path dist/offline).Path + '\cloudflared-windows-amd64.exe'
+          Invoke-WebRequest -UseBasicParsing -Uri 'https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-windows-amd64.exe' -OutFile $cloudflared
+          $sig = Get-AuthenticodeSignature -LiteralPath $cloudflared
+          if ($sig.Status -ne [Management.Automation.SignatureStatus]::Valid) { throw "Cloudflared signature invalid: $($sig.Status)" }
+          ./packaging/windows/build-windows-offline-setup.ps1 -Version '0.7.9' -Architecture amd64 -AgentDockArchive $zip -AgentDockChecksumFile "$zip.sha256" -CloudflaredBinary $cloudflared -OutputDirectory (Resolve-Path dist/setup).Path
+          $setup = 'dist/setup/AgentDockSetup-amd64.exe'
+          if (-not (Test-Path $setup) -or (Get-Item $setup).Length -lt 60MB) { throw 'Native offline setup missing or unexpectedly small' }
+          $hash = (Get-FileHash $setup -Algorithm SHA256).Hash.ToLowerInvariant()
+          [IO.File]::WriteAllText("$setup.sha256","$hash  AgentDockSetup-amd64.exe" + [Environment]::NewLine,[Text.UTF8Encoding]::new($false))
+          Write-Host "Native setup size: $((Get-Item $setup).Length) bytes"
+      - name: Publish standalone desktop Setup EXE as GitHub Release
+        shell: pwsh
+        env:
+          GH_TOKEN: \${{ github.token }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $tag = 'agentdock-desktop-latest'
+          $repo = $env:GITHUB_REPOSITORY
+          $setup = (Resolve-Path dist/setup/AgentDockSetup-amd64.exe).Path
+          $sha = "$setup.sha256"
+          $notes = "Original AgentDock Windows WPF desktop control panel and tray, bundled .NET runtime, offline Inno Setup. NOT the small CLI launcher. Download AgentDockSetup-amd64.exe, run to install, then open AgentDock from Start Menu. The original GUI supports Cloudflare Tunnel; ngrok is not yet integrated into its native tunnel page. Source commit: $env:GITHUB_SHA."
+          gh release view $tag --repo $repo *> $null
+          if ($LASTEXITCODE -eq 0) {
+            gh release upload $tag $setup $sha --clobber --repo $repo
+          } else {
+            gh release create $tag $setup $sha --repo $repo --target $env:GITHUB_SHA --title 'AgentDock Original Desktop GUI Windows Setup' --notes $notes
+          }
+          if ($LASTEXITCODE -ne 0) { throw 'Failed to upload native setup to GitHub Release' }
