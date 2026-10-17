@@ -188,3 +188,27 @@ func TestD3G1RuntimeBackendRegistrationAndConcurrency(t *testing.T) {
 		t.Fatalf("non-native runtime limits changed: got=%+v want=%+v", baseline, agentruntime.DefaultAgentLimits())
 	}
 }
+
+func TestOpenCodeNativeAutonomousBackendRunOmittedModelUsesDeepSeekFlashMax(t *testing.T) {
+	runner := &fakeD3G1AutonomousRunner{
+		result: opencodeautonomous.Result{
+			SubagentID: "agent-default", RootOpenCodeSessionID: "native-root-default",
+			Provider: "jiyuan", Model: "deepseek-flash", Variant: "max", FinalText: "ok",
+		},
+	}
+	backend := newOpenCodeNativeAutonomousAgentBackend(runner)
+	result, err := backend.Run(context.Background(), agentruntime.BackendRequest{
+		AgentID: "agent-default", SessionID: "session-default", Workspace: `C:\\work\\default`,
+		PermissionMode: "project", Provider: d3NativeAutonomousProvider,
+		Model: "", Prompt: "use deterministic default", Timeout: time.Second,
+	}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if runner.request.Provider != "jiyuan" || runner.request.Model != "deepseek-flash" || runner.request.Variant != "max" {
+		t.Fatalf("omitted model routed to %+v, want jiyuan/deepseek-flash#max", runner.request)
+	}
+	if result.ResolvedModel != d3NativeAutonomousDefaultModel {
+		t.Fatalf("resolved model=%q want=%q", result.ResolvedModel, d3NativeAutonomousDefaultModel)
+	}
+}
