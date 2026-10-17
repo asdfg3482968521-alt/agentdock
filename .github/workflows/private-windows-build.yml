@@ -1,18 +1,7 @@
 name: Personal Windows One-Click Package
+# LEGACY CLI/PowerShell packaging only: manual dispatch, never replaces native desktop latest.
 on:
   workflow_dispatch:
-  push:
-    branches:
-      - main
-    paths:
-      - 'cmd/**'
-      - 'internal/**'
-      - 'go.mod'
-      - 'go.sum'
-      - 'scripts/windows/**'
-      - 'Start-AgentDock.cmd'
-      - 'docs/windows-one-click.md'
-      - '.github/workflows/private-windows-build.yml'
 
 concurrency:
   group: personal-windows-package
