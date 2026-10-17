@@ -1,10 +1,14 @@
-# 私有 AgentDock（整合版）
+# 私有 AgentDock · v0.7.9 最新桌面安装版
 
-> **注意：本仓库不是 uvwt/agentdock 上游发行仓库。** 最新私有源码为 v0.7.9 功能整合分支，包含 2026-10-04 的 MCP 会话/Watchdog 及 DeepSeek Flash 子 Agent 路由；之前的 v0.7.7 二进制是旧的预发布构建。
+**Windows 一键安装（原生 WPF 可视化界面，约 104 MB）：** [直接下载 AgentDockSetup-amd64.exe](https://github.com/asdfg3482968521-alt/agentdock/releases/download/agentdock-desktop-latest/AgentDockSetup-amd64.exe)。下载后直接双击安装，在开始菜单打开 **AgentDock**；该安装程序包含原生控制面板、托盘、运行核心和离线环境。
+
+> **旧的 14 MB AgentDock-OneClick-Windows.zip 是命令行 + 简易 PowerShell 配置器，不是原生可视化面板，已不再推荐。** 不要下载错误的包。
 >
-> **Windows 一键使用：** 下载本仓库 Actions 的 Personal Windows Launcher Build 构建工件，解压后双击 **Start-AgentDock.cmd**。在可视化面板中粘贴 ngrok Authtoken、配置 OpenCode/Watchdog、开启 Windows 登录自动任务。参见 [私有版一键配置说明](docs/windows-one-click.md)。
+> 原生控制面板现有的公网配置为 **Cloudflare Tunnel**。ngrok 的 Token 粘贴和守护进程属于独立的旧版辅助配置工具，尚未整合进原生 WPF 的公网配置页。不要同时运行两套 AgentDock 服务占用同一个端口。
 >
-> 下方遗留的“uvwt/agentdock 官方下载链接”“Docker 镜像”和“agentdock update”均指向**上游**，不是你的私有版。请不要用那些入口覆盖私有构建。
+> 这是你的私有分支，不是 uvwt/agentdock 上游发布；下方遗留的上游下载、Docker 和更新链接不能替代你的专有构建。
+
+[查看桌面安装版 Release](https://github.com/asdfg3482968521-alt/agentdock/releases/tag/agentdock-desktop-latest) · [一键下载分支](https://github.com/asdfg3482968521-alt/agentdock/tree/download/windows-latest/downloads)
 
 ---
 
