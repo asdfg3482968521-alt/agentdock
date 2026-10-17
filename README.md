@@ -1,8 +1,14 @@
-# Personal AgentDock fork (unified source)
+# Personal AgentDock · v0.7.9 Native Windows Desktop Installer
 
-> **This is not an upstream uvwt/agentdock release.** This fork integrates the October 2026 session/Watchdog and DeepSeek Flash changes. Use the repository's **Personal Windows Launcher Build** Actions artifact, unzip, and double-click **Start-AgentDock.cmd**. The visual configuration panel supports ngrok, OAuth, OpenCode options and a per-user Windows logon scheduled task. See [one-click Windows guide](docs/windows-one-click.md).
+**Recommended native Windows WPF GUI setup (~104 MB):** [Download AgentDockSetup-amd64.exe](https://github.com/asdfg3482968521-alt/agentdock/releases/download/agentdock-desktop-latest/AgentDockSetup-amd64.exe). Run Setup, then open **AgentDock** from the Windows Start Menu. It includes the original WPF control panel, tray, self-contained desktop runtime, and core service.
+
+> **Do not use the old 14 MB AgentDock-OneClick-Windows.zip expecting the original GUI.** That package is only a CLI and auxiliary PowerShell config panel, not the integrated desktop application.
 >
-> Upstream installer, Docker, release and updater links further below belong to uvwt/agentdock, **not** this private fork. Do not use them to update the custom build.
+> The native GUI currently manages Cloudflare tunnels. ngrok paste and process-management features are in a separate legacy helper, not yet in the native WPF tunnel page. Never run both core supervisors on the same port.
+>
+> This private fork is not the upstream uvwt/agentdock release. Upstream installers and auto-update links below are not suitable for your customized build.
+
+[Native desktop Release](https://github.com/asdfg3482968521-alt/agentdock/releases/tag/agentdock-desktop-latest) · [Download branch](https://github.com/asdfg3482968521-alt/agentdock/tree/download/windows-latest/downloads)
 
 ---
 
