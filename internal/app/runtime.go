@@ -54,6 +54,8 @@ type Runtime struct {
 	ws               *workspace.Workspace
 	skills           *toolskill.Service
 	mcpClients       *mcpclient.Manager
+	mcpSessions      *MCPClientSessionStore
+	watchdog         *watchdogClient
 	tasks            *taskstate.Store
 	command          *toolcommand.Service
 	files            *toolfile.Service
@@ -64,7 +66,7 @@ type Runtime struct {
 	jobs             *jobruntime.Manager
 	sessions         *sessionruntime.Manager
 	agents           *agentruntime.Manager
-	credentialStore  *credential.Store
+	credentialStore  agentCredentialStore
 	media            *toolmedia.Service
 	browser          *toolbrowser.Service
 	recall           *toolrecall.Service
@@ -109,6 +111,18 @@ func NewRuntime(cfg config.Config) (*Runtime, error) {
 		cfg: cfg, ws: ws, skills: skills,
 		mcpClients: mcpClients, tasks: tasks,
 		commandCtx: commandCtx, commandCancel: commandCancel,
+	}
+	mcpSessions, mcpSessionErr := newMCPClientSessionStore(cfg.AgentDockHome)
+	if mcpSessionErr != nil {
+		runtime.recordStartupIssue("mcp_session_awareness", mcpSessionErr)
+	} else {
+		runtime.mcpSessions = mcpSessions
+	}
+	watchdog, watchdogErr := newWatchdogClient(cfg.WatchdogDashboardURL)
+	if watchdogErr != nil {
+		runtime.recordStartupIssue("watchdog_dashboard", watchdogErr)
+	} else {
+		runtime.watchdog = watchdog
 	}
 
 	// Everything below this point is optional to the HTTP/MCP control plane.
@@ -324,16 +338,18 @@ func (r *Runtime) subsystemStatus() map[string]any {
 		return map[string]any{}
 	}
 	return map[string]any{
-		"session":             r.sessions != nil,
-		"job":                 r.jobs != nil,
-		"agent":               r.agents != nil,
-		"credential_store":    r.credentialStore != nil,
-		"opencode_execution":  r.openCode != nil,
-		"opencode_native":     r.nativeSupervisor != nil,
-		"opencode_autonomous": r.nativeAutonomous != nil,
-		"acp":                 r.acp != nil,
-		"dynamic_mcp":         r.dynamicMCP != nil,
-		"browser":             r.browser != nil,
+		"session":               r.sessions != nil,
+		"job":                   r.jobs != nil,
+		"agent":                 r.agents != nil,
+		"credential_store":      r.credentialStore != nil,
+		"opencode_execution":    r.openCode != nil,
+		"opencode_native":       r.nativeSupervisor != nil,
+		"opencode_autonomous":   r.nativeAutonomous != nil,
+		"acp":                   r.acp != nil,
+		"dynamic_mcp":           r.dynamicMCP != nil,
+		"browser":               r.browser != nil,
+		"mcp_session_awareness": r.mcpSessions != nil,
+		"watchdog_dashboard":    r.watchdog != nil,
 	}
 }
 
@@ -489,6 +505,13 @@ func validateTopLevelArguments(spec ToolSpec, args map[string]any) error {
 func (r *Runtime) serverInfo() Result {
 	names := r.ToolNames()
 
+	// 严格校验 outputSchema 的客户端（如 Notion）会把 null 视为校验失败：
+	// 所有声明为 array 的字段在为空时也必须序列化为 []，不能是 null。
+	openCodeRuntimes := r.openCodeSummaries()
+	if openCodeRuntimes == nil {
+		openCodeRuntimes = []opencoderuntime.Summary{}
+	}
+
 	// server_info 是排障入口：这里按主题分组保留字段，避免新增运行能力时
 	// 把自检输出重新堆成一行难以审查的 map。
 	return Result{
@@ -518,23 +541,42 @@ func (r *Runtime) serverInfo() Result {
 			"max_retained": toolcommand.MaxRetainedSessions,
 		},
 
-		"browser_enabled":     r.cfg.BrowserEnabled,
-		"acp_enabled":         r.cfg.ACPEnabled,
-		"acp_agent":           r.cfg.ACPAgentName,
-		"opencode_enabled":    r.cfg.OpenCodeEnabled,
-		"opencode_manifest":   r.cfg.OpenCodeRuntimeManifest,
-		"opencode_runtimes":   r.openCodeSummaries(),
-		"opencode_tools":      append([]string(nil), opencoderuntime.RequiredTools...),
-		"trusted_proxy_cidrs": append([]string(nil), r.cfg.TrustedProxyCIDRs...),
+		"browser_enabled":               r.cfg.BrowserEnabled,
+		"acp_enabled":                   r.cfg.ACPEnabled,
+		"acp_agent":                     r.cfg.ACPAgentName,
+		"opencode_enabled":              r.cfg.OpenCodeEnabled,
+		"opencode_manifest":             r.cfg.OpenCodeRuntimeManifest,
+		"opencode_runtimes":             openCodeRuntimes,
+		"opencode_tools":                append([]string{}, opencoderuntime.RequiredTools...),
+		"opencode_native_default_model": d3NativeAutonomousDefaultModel,
+		"trusted_proxy_cidrs":           append([]string{}, r.cfg.TrustedProxyCIDRs...),
 
 		"degraded_startup": len(r.startupIssues) > 0,
 		"startup_issues":   r.startupIssueList(),
 		"subsystems":       r.subsystemStatus(),
 
-		"auth_enabled":  r.authEnabled(),
-		"endpoint_path": "/mcp",
-		"tools":         names,
-		"tool_count":    len(names),
+		"auth_enabled":          r.authEnabled(),
+		"endpoint_path":         "/mcp",
+		"mcp_session_awareness": r.mcpSessions != nil,
+		"mcp_session_state_file": func() string {
+			if r.mcpSessions == nil {
+				return ""
+			}
+			return r.mcpSessions.Path()
+		}(),
+		"mcp_call_log_file": func() string {
+			if r.mcpSessions == nil {
+				return ""
+			}
+			return r.mcpSessions.ActivityLogPath()
+		}(),
+		// 会话引导/控制能力清单：客户端据此检测支持，而不是猜测参数。
+		"session_bootstrap_actions":   []string{"bootstrap", "status", "bind", "pause", "interrupt", "resume", "abort"},
+		"mcp_session_control_actions": []string{"status", "pause", "interrupt", "resume", "abort"},
+		"watchdog_dashboard_url":      r.cfg.WatchdogDashboardURL,
+		"watchdog_dashboard_enabled":  r.watchdog != nil,
+		"tools":                       names,
+		"tool_count":                  len(names),
 	}
 }
 

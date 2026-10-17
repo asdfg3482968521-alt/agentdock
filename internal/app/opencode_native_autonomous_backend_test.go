@@ -43,7 +43,7 @@ func TestOpenCodeNativeAutonomousBackendMetadataAndModel(t *testing.T) {
 	if metadata.BackendIdentity() != agentruntime.BackendIdentityOpenCode || metadata.RequiresCredential() {
 		t.Fatalf("metadata identity=%q requires_credential=%v", metadata.BackendIdentity(), metadata.RequiresCredential())
 	}
-	for raw, want := range map[string]string{"": d3NativeAutonomousDefaultModel, "default": d3NativeAutonomousDefaultModel, "custom-model": "custom-model"} {
+	for raw, want := range map[string]string{"": d3NativeAutonomousDefaultModel, "default": d3NativeAutonomousDefaultModel, "custom-model": "custom-model", "jiyuan/deepseek-flash#low": "jiyuan/deepseek-flash#low"} {
 		got, err := backend.ResolveModel(raw)
 		if err != nil || got != want {
 			t.Fatalf("ResolveModel(%q)=%q err=%v want=%q", raw, got, err, want)
@@ -51,11 +51,48 @@ func TestOpenCodeNativeAutonomousBackendMetadataAndModel(t *testing.T) {
 	}
 }
 
+func TestParseD3NativeModelRouteSplitsProviderModelAndVariant(t *testing.T) {
+	route, err := parseD3NativeModelRoute("jiyuan/deepseek-flash#max")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if route.Provider != "jiyuan" || route.Model != "deepseek-flash" || route.Variant != "max" {
+		t.Fatalf("route=%+v", route)
+	}
+	if got := canonicalD3NativeModel(route); got != "jiyuan/deepseek-flash#max" {
+		t.Fatalf("canonical=%q", got)
+	}
+}
+
+func TestOpenCodeNativeAutonomousBackendMapsCompositeModelRoute(t *testing.T) {
+	runner := &fakeD3G1AutonomousRunner{
+		result: opencodeautonomous.Result{
+			SubagentID: "agent-route", RootOpenCodeSessionID: "native-root-route",
+			Provider: "jiyuan", Model: "deepseek-flash", Variant: "high", FinalText: "ok",
+		},
+	}
+	backend := newOpenCodeNativeAutonomousAgentBackend(runner)
+	result, err := backend.Run(context.Background(), agentruntime.BackendRequest{
+		AgentID: "agent-route", SessionID: "session-route", Workspace: `C:\work\route`,
+		PermissionMode: "project", Provider: d3NativeAutonomousProvider,
+		Model: "jiyuan/deepseek-flash#high", Prompt: "route model correctly", Timeout: time.Second,
+	}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if runner.request.Provider != "jiyuan" || runner.request.Model != "deepseek-flash" || runner.request.Variant != "high" {
+		t.Fatalf("runner request=%+v", runner.request)
+	}
+	if result.ResolvedModel != "jiyuan/deepseek-flash#high" {
+		t.Fatalf("resolved model=%q", result.ResolvedModel)
+	}
+}
+
 func TestOpenCodeNativeAutonomousBackendMapsAgentRequestAndTelemetry(t *testing.T) {
 	runner := &fakeD3G1AutonomousRunner{
 		telemetry: []opencodeautonomous.TelemetryEvent{{EventID: "evt-1", Cursor: 3, SessionID: "native-root-a", Tool: "read", CallID: "call-1", Status: "completed"}},
 		result: opencodeautonomous.Result{
-			SubagentID: "agent-a", RootOpenCodeSessionID: "native-root-a", Provider: "opencode", Model: d3NativeAutonomousDefaultModel,
+			SubagentID: "agent-a", RootOpenCodeSessionID: "native-root-a", Provider: "jiyuan", Model: "deepseek-flash", Variant: "max",
 			FinalText: "D3 G1 autonomous result", AutonomousToolSteps: 1,
 		},
 	}
@@ -76,7 +113,7 @@ func TestOpenCodeNativeAutonomousBackendMapsAgentRequestAndTelemetry(t *testing.
 	if runner.request.AgentID != "agent-a" || runner.request.AgentDockSessionID != "session-a" || runner.request.Workspace != `C:\work\A` {
 		t.Fatalf("identity mapping=%+v", runner.request)
 	}
-	if runner.request.PermissionMode != "project" || runner.request.Provider != "opencode" || runner.request.Model != d3NativeAutonomousDefaultModel {
+	if runner.request.PermissionMode != "project" || runner.request.Provider != "jiyuan" || runner.request.Model != "deepseek-flash" || runner.request.Variant != "max" {
 		t.Fatalf("authority/model mapping=%+v", runner.request)
 	}
 	if runner.request.Task != "Solve the high-level task autonomously." || runner.request.Timeout != 45*time.Second {
@@ -85,11 +122,14 @@ func TestOpenCodeNativeAutonomousBackendMapsAgentRequestAndTelemetry(t *testing.
 	if result.Summary != "D3 G1 autonomous result" || result.ResolvedModel != d3NativeAutonomousDefaultModel || result.StopReason != "stop" {
 		t.Fatalf("backend result=%+v", result)
 	}
-	if len(emitted) != 1 || emitted[0].Kind != agentruntime.ProviderEventText || emitted[0].Tool != nil {
-		t.Fatalf("telemetry must be projected as text-only Agent output: %+v", emitted)
+	if len(emitted) != 2 || emitted[0].Kind != agentruntime.ProviderEventText || emitted[0].Tool != nil || emitted[1].Kind != agentruntime.ProviderEventText || emitted[1].Tool != nil {
+		t.Fatalf("telemetry and final text must be projected as text-only Agent output: %+v", emitted)
 	}
 	if !strings.Contains(emitted[0].Text, `"tool":"read"`) || !strings.Contains(emitted[0].Text, `"call_id":"call-1"`) {
 		t.Fatalf("telemetry output=%q", emitted[0].Text)
+	}
+	if emitted[1].Text != "D3 G1 autonomous result" {
+		t.Fatalf("final output=%q want autonomous result", emitted[1].Text)
 	}
 }
 
@@ -110,6 +150,25 @@ func TestOpenCodeNativeAutonomousBackendPropagatesCancellation(t *testing.T) {
 	}
 }
 
+func TestD3NativeDefaultAndExplicitModels(t *testing.T) {
+	for _, tc := range []struct {
+		raw  string
+		want d3NativeModelRoute
+	}{
+		{"", d3NativeModelRoute{Provider: "jiyuan", Model: "deepseek-flash", Variant: "max"}},
+		{"default", d3NativeModelRoute{Provider: "jiyuan", Model: "deepseek-flash", Variant: "max"}},
+		{"jiyuan/deepseek-flash#low", d3NativeModelRoute{Provider: "jiyuan", Model: "deepseek-flash", Variant: "low"}},
+		{"jiyuan/deepseek-flash#high", d3NativeModelRoute{Provider: "jiyuan", Model: "deepseek-flash", Variant: "high"}},
+		{"jiyuan/glm-5.3-flash#high", d3NativeModelRoute{Provider: "jiyuan", Model: "glm-5.3-flash", Variant: "high"}},
+		{"opencode/custom-model#low", d3NativeModelRoute{Provider: "opencode", Model: "custom-model", Variant: "low"}},
+	} {
+		got, err := parseD3NativeModelRoute(tc.raw)
+		if err != nil || got != tc.want {
+			t.Fatalf("parseD3NativeModelRoute(%q)=%+v err=%v want=%+v", tc.raw, got, err, tc.want)
+		}
+	}
+}
+
 func TestD3G1RuntimeBackendRegistrationAndConcurrency(t *testing.T) {
 	runner := &fakeD3G1AutonomousRunner{}
 	backends := map[string]agentruntime.AgentBackend{"opencode": newOpenCodeBackend(&fakeC25OpenCodeWorker{})}
@@ -127,5 +186,29 @@ func TestD3G1RuntimeBackendRegistrationAndConcurrency(t *testing.T) {
 	baseline := d3G1AgentLimits(false)
 	if baseline != agentruntime.DefaultAgentLimits() {
 		t.Fatalf("non-native runtime limits changed: got=%+v want=%+v", baseline, agentruntime.DefaultAgentLimits())
+	}
+}
+
+func TestOpenCodeNativeAutonomousBackendRunOmittedModelUsesDeepSeekFlashMax(t *testing.T) {
+	runner := &fakeD3G1AutonomousRunner{
+		result: opencodeautonomous.Result{
+			SubagentID: "agent-default", RootOpenCodeSessionID: "native-root-default",
+			Provider: "jiyuan", Model: "deepseek-flash", Variant: "max", FinalText: "ok",
+		},
+	}
+	backend := newOpenCodeNativeAutonomousAgentBackend(runner)
+	result, err := backend.Run(context.Background(), agentruntime.BackendRequest{
+		AgentID: "agent-default", SessionID: "session-default", Workspace: `C:\\work\\default`,
+		PermissionMode: "project", Provider: d3NativeAutonomousProvider,
+		Model: "", Prompt: "use deterministic default", Timeout: time.Second,
+	}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if runner.request.Provider != "jiyuan" || runner.request.Model != "deepseek-flash" || runner.request.Variant != "max" {
+		t.Fatalf("omitted model routed to %+v, want jiyuan/deepseek-flash#max", runner.request)
+	}
+	if result.ResolvedModel != d3NativeAutonomousDefaultModel {
+		t.Fatalf("resolved model=%q want=%q", result.ResolvedModel, d3NativeAutonomousDefaultModel)
 	}
 }

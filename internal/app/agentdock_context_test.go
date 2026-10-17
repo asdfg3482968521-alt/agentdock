@@ -46,6 +46,8 @@ func TestAgentDockContextToolReturnsRuntimeIndex(t *testing.T) {
 		"Use this Skill for context index tests.",
 		"skill://demo-skill/SKILL.md",
 		"AgentDock 自带工具直接调用",
+		"mcp_session_bind",
+		"openai/session",
 		"## 使用规则",
 	} {
 		if !strings.Contains(contextText, want) {

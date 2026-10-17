@@ -10,6 +10,12 @@ import (
 )
 
 func (r *Runtime) AgentDockContext(ctx context.Context) (Result, error) {
+	return Result{"context": renderAgentDockContext(sectionsForRuntime(r, ctx))}, nil
+}
+
+// sectionsForRuntime builds the capability/rules sections shared by the
+// direct AgentDockContext callers and the bootstrap action.
+func sectionsForRuntime(r *Runtime, ctx context.Context) []capabilitySection {
 	_, skillSummary, _ := r.skillCapabilityIndex()
 	_, dynamicMCPSummary := r.dynamicMCPCapabilityIndex()
 
@@ -17,6 +23,7 @@ func (r *Runtime) AgentDockContext(ctx context.Context) (Result, error) {
 		"需要真实执行命令或检查环境时，先用 exec_command 查看现状，再修改，修改后真实验证。",
 		"先根据 Skill 索引的 name 和 description 选择相关 Skill，再用 read_file 读取其 file 指向的 SKILL.md；Skill 只提供流程与约束，实际操作使用命令、文件、浏览器或 MCP 工具。",
 		"AgentDock 自带工具直接调用；动态 MCP 工具先用 mcp_tool_search 查找、mcp_tool_inspect 读取 schema，再用 mcp_tool_call 执行。",
+		"当 MCP 客户端提供协议级 openai/session 与 agentdock/conversation_url 元数据时，AgentDock 会在首次调用自动绑定当前 ChatGPT 对话；需要显式绑定或管理绑定时用 mcp_session_bind / agentdock_context(action=bind)，控制 Watchdog 任务用 mcp_session_control，不能把会话标识当普通工具参数伪造。",
 	}
 	sections := []capabilitySection{
 		{Title: "Skill 能力索引", Lines: splitNonEmptyLines(skillSummary)},
@@ -46,12 +53,167 @@ func (r *Runtime) AgentDockContext(ctx context.Context) (Result, error) {
 		rules = append(rules, "记忆摘要只提供高优先级规则；具体历史事实不确定时，再用 recall_search 或 recall_read 精确召回。")
 	}
 	sections = append(sections, capabilitySection{Title: "使用规则", Lines: rules})
-
-	return Result{"context": renderAgentDockContext(sections)}, nil
+	return sections
 }
 
-func (r *Runtime) agentDockContextTool(ctx context.Context, _ map[string]any) (Result, error) {
-	return r.AgentDockContext(ctx)
+func (r *Runtime) agentDockContextTool(ctx context.Context, args map[string]any) (Result, error) {
+	action := strings.ToLower(strings.TrimSpace(stringArg(args, "action")))
+	if action == "" {
+		action = "bootstrap"
+	}
+	info, hasSession := MCPClientContextFromContext(ctx)
+	switch action {
+	case "bootstrap":
+		// 显式 URL 回退必须以协议身份为前提，绝不能凭空伪造身份。
+		if stringArg(args, "conversation_url") != "" && !hasSession {
+			return nil, toolError(
+				"MCP_CLIENT_SESSION_UNAVAILABLE",
+				"this request did not include an MCP client session identity",
+				"runtime",
+			)
+		}
+		// 协议元数据与参数回退合并成单一候选后，用与元数据相同的原子
+		// autoBind 绑定：任一来源缺失时匿名保留；两来源不一致时在绑定
+		// 生效前失败，不留下新绑定或业务副作用。显式参数严格校验，
+		// 无效或超限值必须 INVALID_ARGUMENT，不能静默忽略。
+		if hasSession {
+			merged, mergeErr := bootstrapBindingCandidate(info, args)
+			if mergeErr != nil {
+				return nil, mergeErr
+			}
+			if err := r.AutoBindMCPClientSession(merged); err != nil {
+				return nil, err
+			}
+		}
+		result := Result{"context": renderAgentDockContext(sectionsForRuntime(r, ctx))}
+		if hasSession {
+			result["action"] = "bootstrap"
+			if r.mcpSessions != nil {
+				if record, ok := r.mcpSessions.current(info.SessionID); ok {
+					result["session"] = publicMCPClientSession(record)
+					result["state_file"] = r.mcpSessions.Path()
+				}
+			}
+		}
+		return result, nil
+	case "status":
+		if !hasSession {
+			return nil, toolError(
+				"MCP_CLIENT_SESSION_UNAVAILABLE",
+				"this request did not include an MCP client session identity",
+				"runtime",
+			)
+		}
+		if err := r.AutoBindMCPClientSession(info); err != nil {
+			return nil, err
+		}
+		result, err := r.watchdogStatus(ctx, info)
+		if err != nil {
+			return nil, err
+		}
+		// 缓存客户端 schema 兼容：每个成功动作都携带 context 字段。
+		result["context"] = ""
+		return result, nil
+	case "bind":
+		// 显式绑定是唯一允许覆盖既有绑定的入口；不做元数据自动绑定。
+		if !hasSession {
+			return nil, toolError(
+				"MCP_CLIENT_SESSION_UNAVAILABLE",
+				"this request did not include an MCP client session identity",
+				"runtime",
+			)
+		}
+		if r == nil || r.mcpSessions == nil {
+			return nil, toolError("MCP_SESSION_AWARENESS_UNAVAILABLE", "MCP session awareness is unavailable", "runtime")
+		}
+		record, err := r.mcpSessions.bind(
+			info.SessionID,
+			stringArg(args, "conversation_url"),
+			stringArg(args, "conversation_title"),
+			stringArg(args, "watchdog_task_id"),
+		)
+		if err != nil {
+			return nil, toolError("INVALID_ARGUMENT", err.Error(), "validation")
+		}
+		return Result{
+			"context":    "",
+			"action":     "bind",
+			"session":    publicMCPClientSession(record),
+			"state_file": r.mcpSessions.Path(),
+		}, nil
+	case "pause", "interrupt", "resume", "abort":
+		if !hasSession {
+			return nil, toolError(
+				"MCP_CLIENT_SESSION_UNAVAILABLE",
+				"this request did not include an MCP client session identity",
+				"runtime",
+			)
+		}
+		if err := r.AutoBindMCPClientSession(info); err != nil {
+			return nil, err
+		}
+		result, err := r.watchdogControl(ctx, info, action)
+		if err != nil {
+			return nil, err
+		}
+		// 缓存客户端 schema 兼容：每个成功动作都携带 context 字段。
+		result["context"] = ""
+		return result, nil
+	default:
+		return nil, toolError("INVALID_ARGUMENT", "unknown agentdock_context action: "+action, "validation")
+	}
+}
+
+// bootstrapBindingCandidate merges protocol metadata and the bootstrap
+// argument fallback into one binding candidate. A disagreement between the two
+// sources (different canonical conversation URLs or different non-empty
+// watchdog task ids) fails here, before any binding or business mutation.
+// Explicit fallback values are strictly validated: invalid conversation URLs
+// and oversized title/task values must fail with INVALID_ARGUMENT instead of
+// being silently ignored.
+func bootstrapBindingCandidate(info MCPClientContext, args map[string]any) (MCPClientContext, error) {
+	argURL := stringArg(args, "conversation_url")
+	argTitle := stringArg(args, "conversation_title")
+	argTask := stringArg(args, "watchdog_task_id")
+	metaURL := strings.TrimSpace(info.ConversationURL)
+	metaTask := strings.TrimSpace(info.WatchdogTaskID)
+
+	if argURL != "" {
+		if err := validateChatGPTConversationURL(argURL); err != nil {
+			return MCPClientContext{}, toolError("INVALID_ARGUMENT", err.Error(), "validation")
+		}
+	}
+	if len(argTitle) > 512 {
+		return MCPClientContext{}, toolError("INVALID_ARGUMENT", "conversation_title exceeds 512 characters", "validation")
+	}
+	if len(argTask) > 128 {
+		return MCPClientContext{}, toolError("INVALID_ARGUMENT", "watchdog_task_id exceeds 128 characters", "validation")
+	}
+	if metaURL != "" && argURL != "" && canonicalConversationURL(metaURL) != canonicalConversationURL(argURL) {
+		return MCPClientContext{}, toolError(
+			"MCP_SESSION_BINDING_CONFLICT",
+			"binding conflict: bootstrap conversation URL disagrees with protocol metadata",
+			"validation",
+		)
+	}
+	if metaTask != "" && argTask != "" && metaTask != argTask {
+		return MCPClientContext{}, toolError(
+			"MCP_SESSION_BINDING_CONFLICT",
+			"binding conflict: bootstrap watchdog task id disagrees with protocol metadata",
+			"validation",
+		)
+	}
+	merged := info
+	if argURL != "" && metaURL == "" {
+		merged.ConversationURL = argURL
+	}
+	if argTitle != "" {
+		merged.ConversationTitle = argTitle
+	}
+	if argTask != "" {
+		merged.WatchdogTaskID = argTask
+	}
+	return merged, nil
 }
 
 type capabilitySection struct {

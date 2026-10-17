@@ -8,6 +8,11 @@ import (
 	"github.com/uvwt/agentdock/internal/credential"
 )
 
+type agentCredentialStore interface {
+	credential.Resolver
+	Describe(context.Context, string) (credential.Metadata, error)
+}
+
 type agentBackendRoute string
 
 const (
@@ -27,7 +32,7 @@ func (route agentBackendRoute) requiresStoredCredential() bool {
 	return route != agentBackendOpenCode
 }
 
-func validateAgentStartCredential(ctx context.Context, store *credential.Store, route agentBackendRoute, provider, credentialRef string) error {
+func validateAgentStartCredential(ctx context.Context, store agentCredentialStore, route agentBackendRoute, provider, credentialRef string) error {
 	if err := credential.ValidateRef(credentialRef); err != nil {
 		return err
 	}

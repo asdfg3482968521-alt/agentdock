@@ -3,6 +3,7 @@ package mcp
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -91,6 +92,431 @@ func TestToolEnvelopePassesThroughDynamicMCPContent(t *testing.T) {
 	structured, _ := response["structuredContent"].(map[string]any)
 	if structured["name"] != "figma:get_screenshot" {
 		t.Fatalf("structuredContent = %#v", structured)
+	}
+}
+
+func TestMCPClientContextReadsOpenAISessionMeta(t *testing.T) {
+	request := &mcpsdk.CallToolRequest{
+		Params: &mcpsdk.CallToolParamsRaw{
+			Meta: mcpsdk.Meta{"openai/session": " chatgpt-session-123 "},
+			Name: "server_info",
+		},
+	}
+	info := mcpClientContextFromRequest(request)
+	if info.SessionID != "chatgpt-session-123" {
+		t.Fatalf("SessionID = %q", info.SessionID)
+	}
+}
+
+func TestMCPClientContextReadsAgentDockBindingMeta(t *testing.T) {
+	request := &mcpsdk.CallToolRequest{
+		Params: &mcpsdk.CallToolParamsRaw{
+			Meta: mcpsdk.Meta{
+				"openai/session":               "chatgpt-session-123",
+				"agentdock/conversation_url":   " https://chatgpt.com/c/meta-1?x=1 ",
+				"agentdock/conversation_title": " Meta title ",
+				"agentdock/watchdog_task_id":   " wd-meta-1 ",
+			},
+			Name: "server_info",
+		},
+	}
+	info := mcpClientContextFromRequest(request)
+	if info.ConversationURL != "https://chatgpt.com/c/meta-1?x=1" {
+		t.Fatalf("ConversationURL = %q", info.ConversationURL)
+	}
+	if info.ConversationTitle != "Meta title" || info.WatchdogTaskID != "wd-meta-1" {
+		t.Fatalf("info = %#v", info)
+	}
+}
+
+func newSDKTestServer(t *testing.T) (*app.Runtime, *Server) {
+	t.Helper()
+	root := t.TempDir()
+	cfg := config.Config{AgentDockDefaultDir: root, AgentDockHome: filepath.Join(root, ".agentdock")}
+	if err := cfg.Normalize(); err != nil {
+		t.Fatalf("Normalize() error = %v", err)
+	}
+	runtime, err := app.NewRuntime(cfg)
+	if err != nil {
+		t.Fatalf("NewRuntime() error = %v", err)
+	}
+	t.Cleanup(func() { _ = runtime.Close() })
+	return runtime, NewServer(runtime, cfg)
+}
+
+func connectSDKClient(t *testing.T, server *Server) *mcpsdk.ClientSession {
+	t.Helper()
+	serverTransport, clientTransport := mcpsdk.NewInMemoryTransports()
+	serverDone := make(chan error, 1)
+	go func() { serverDone <- server.sdk.Run(t.Context(), serverTransport) }()
+	client := mcpsdk.NewClient(
+		&mcpsdk.Implementation{Name: "agentdock-sdk-test", Version: "1.0.0"},
+		&mcpsdk.ClientOptions{Capabilities: &mcpsdk.ClientCapabilities{}},
+	)
+	session, err := client.Connect(t.Context(), clientTransport, nil)
+	if err != nil {
+		t.Fatalf("Connect() error = %v", err)
+	}
+	t.Cleanup(func() {
+		if err := session.Close(); err != nil {
+			t.Errorf("Close() error = %v", err)
+		}
+		if err := <-serverDone; err != nil && err != context.Canceled {
+			t.Errorf("Server.Run() error = %v", err)
+		}
+	})
+	return session
+}
+
+func callSDKTool(t *testing.T, session *mcpsdk.ClientSession, meta mcpsdk.Meta, name string, args map[string]any) *mcpsdk.CallToolResult {
+	t.Helper()
+	params := &mcpsdk.CallToolParams{Name: name}
+	if len(meta) > 0 {
+		params.Meta = meta
+	}
+	if args != nil {
+		params.Arguments = args
+	}
+	result, err := session.CallTool(t.Context(), params)
+	if err != nil {
+		t.Fatalf("CallTool(%s) error = %v", name, err)
+	}
+	return result
+}
+
+func TestSDKFirstCallMetadataAutoBindsSession(t *testing.T) {
+	_, server := newSDKTestServer(t)
+	session := connectSDKClient(t, server)
+
+	const rawSession = "openai-session-auto-1"
+	meta := mcpsdk.Meta{
+		"openai/session":             rawSession,
+		"agentdock/conversation_url": "https://chatgpt.com/c/sdk-auto-1?q=1#frag",
+	}
+	result := callSDKTool(t, session, meta, "server_info", nil)
+	if result.IsError {
+		t.Fatalf("server_info result = %#v", result)
+	}
+
+	current := callSDKTool(t, session, mcpsdk.Meta{"openai/session": rawSession}, "mcp_session_current", nil)
+	if current.IsError {
+		t.Fatalf("mcp_session_current result = %#v", current)
+	}
+	structured := current.StructuredContent.(map[string]any)
+	sessionInfo := structured["session"].(map[string]any)
+	if sessionInfo["conversation_url"] != "https://chatgpt.com/c/sdk-auto-1" {
+		t.Fatalf("canonical conversation_url = %#v", sessionInfo["conversation_url"])
+	}
+	if sessionInfo["bound_at"] == "" {
+		t.Fatalf("bound_at missing: %#v", sessionInfo)
+	}
+}
+
+func TestSDKAutoBindIdempotentStableBoundAt(t *testing.T) {
+	_, server := newSDKTestServer(t)
+	session := connectSDKClient(t, server)
+
+	const rawSession = "openai-session-idem-1"
+	meta := mcpsdk.Meta{
+		"openai/session":             rawSession,
+		"agentdock/conversation_url": "https://chatgpt.com/c/sdk-idem-1",
+	}
+	for i := 0; i < 2; i++ {
+		if result := callSDKTool(t, session, meta, "server_info", nil); result.IsError {
+			t.Fatalf("server_info #%d = %#v", i, result)
+		}
+	}
+	current := callSDKTool(t, session, mcpsdk.Meta{"openai/session": rawSession}, "mcp_session_current", nil)
+	sessionInfo := current.StructuredContent.(map[string]any)["session"].(map[string]any)
+	firstBoundAt, _ := sessionInfo["bound_at"].(string)
+	if firstBoundAt == "" {
+		t.Fatal("bound_at missing")
+	}
+	if result := callSDKTool(t, session, meta, "server_info", nil); result.IsError {
+		t.Fatalf("third server_info = %#v", result)
+	}
+	current = callSDKTool(t, session, mcpsdk.Meta{"openai/session": rawSession}, "mcp_session_current", nil)
+	sessionInfo = current.StructuredContent.(map[string]any)["session"].(map[string]any)
+	if secondBoundAt, _ := sessionInfo["bound_at"].(string); secondBoundAt != firstBoundAt {
+		t.Fatalf("bound_at changed across idempotent auto bind: %q -> %q", firstBoundAt, secondBoundAt)
+	}
+}
+
+func TestSDKBootstrapFallbackBindsAndReturnsExactSession(t *testing.T) {
+	_, server := newSDKTestServer(t)
+	session := connectSDKClient(t, server)
+
+	meta := mcpsdk.Meta{"openai/session": "openai-session-fallback-1"}
+	result := callSDKTool(t, session, meta, "agentdock_context", map[string]any{
+		"action":           "bootstrap",
+		"conversation_url": "https://chatgpt.com/c/sdk-fallback-1",
+		"watchdog_task_id": "wd-fallback-1",
+	})
+	if result.IsError {
+		t.Fatalf("bootstrap result = %#v", result)
+	}
+	structured := result.StructuredContent.(map[string]any)
+	contextText, _ := structured["context"].(string)
+	if contextText == "" {
+		t.Fatal("bootstrap missing context")
+	}
+	sessionInfo, ok := structured["session"].(map[string]any)
+	if !ok {
+		t.Fatalf("bootstrap missing session object: %#v", structured)
+	}
+	if sessionInfo["conversation_url"] != "https://chatgpt.com/c/sdk-fallback-1" || sessionInfo["watchdog_task_id"] != "wd-fallback-1" {
+		t.Fatalf("bootstrap session = %#v", sessionInfo)
+	}
+	if _, ok := structured["state_file"]; !ok {
+		t.Fatalf("bootstrap missing state_file: %#v", structured)
+	}
+
+	// 与 mcp_session_current 的 session 对象同构（跳过易变的调用活动字段）。
+	current := callSDKTool(t, session, meta, "mcp_session_current", nil)
+	currentInfo := current.StructuredContent.(map[string]any)["session"].(map[string]any)
+	volatile := map[string]bool{
+		"bound_at": true, "last_seen_at": true, "last_started_at": true, "last_finished_at": true,
+		"last_tool": true, "last_request_id": true, "tool_calls": true, "active_calls": true,
+		"last_duration_ms": true, "last_ok": true,
+	}
+	for key, value := range sessionInfo {
+		if volatile[key] {
+			continue
+		}
+		if currentValue, ok := currentInfo[key]; ok && currentValue != value {
+			t.Fatalf("session field %q differs: bootstrap=%#v current=%#v", key, value, currentValue)
+		}
+	}
+}
+
+func TestSDKAnonymousNoURLTracking(t *testing.T) {
+	_, server := newSDKTestServer(t)
+	session := connectSDKClient(t, server)
+
+	meta := mcpsdk.Meta{"openai/session": "openai-session-anon-1"}
+	if result := callSDKTool(t, session, meta, "server_info", nil); result.IsError {
+		t.Fatalf("server_info = %#v", result)
+	}
+	current := callSDKTool(t, session, meta, "mcp_session_current", nil)
+	sessionInfo := current.StructuredContent.(map[string]any)["session"].(map[string]any)
+	if sessionInfo["conversation_url"] != "" || sessionInfo["bound_at"] != "" {
+		t.Fatalf("anonymous session must stay unbound: %#v", sessionInfo)
+	}
+	if sessionInfo["session_key"] == "" {
+		t.Fatalf("anonymous session missing session_key: %#v", sessionInfo)
+	}
+}
+
+func TestSDKBindingConflictRejectsBeforeSideEffects(t *testing.T) {
+	_, server := newSDKTestServer(t)
+	session := connectSDKClient(t, server)
+
+	meta := mcpsdk.Meta{"openai/session": "openai-session-conflict-1"}
+	if result := callSDKTool(t, session, meta, "mcp_session_bind", map[string]any{
+		"conversation_url": "https://chatgpt.com/c/sdk-bound-a",
+	}); result.IsError {
+		t.Fatalf("bind = %#v", result)
+	}
+
+	// 元数据 URL 与既有绑定冲突：业务工具（file_edit）不得产生副作用。
+	marker := filepath.Join(t.TempDir(), "must-not-exist.txt")
+	conflictingMeta := mcpsdk.Meta{
+		"openai/session":             "openai-session-conflict-1",
+		"agentdock/conversation_url": "https://chatgpt.com/c/sdk-bound-b",
+	}
+	result := callSDKTool(t, session, conflictingMeta, "file_edit", map[string]any{
+		"action":  "add",
+		"path":    marker,
+		"content": "side effect",
+	})
+	if !result.IsError {
+		t.Fatalf("conflicting file_edit must fail before side effects: %#v", result)
+	}
+	if _, err := os.Stat(marker); !os.IsNotExist(err) {
+		t.Fatalf("file_edit side effect happened despite conflict (stat err=%v)", err)
+	}
+
+	// 冲突后既有绑定保持不变。
+	current := callSDKTool(t, session, meta, "mcp_session_current", nil)
+	sessionInfo := current.StructuredContent.(map[string]any)["session"].(map[string]any)
+	if sessionInfo["conversation_url"] != "https://chatgpt.com/c/sdk-bound-a" {
+		t.Fatalf("binding changed after conflict: %#v", sessionInfo)
+	}
+}
+
+func TestSDKBootstrapMetadataArgsDisagreementRejected(t *testing.T) {
+	_, server := newSDKTestServer(t)
+	session := connectSDKClient(t, server)
+
+	meta := mcpsdk.Meta{
+		"openai/session":             "openai-session-bootstrap-conflict-1",
+		"agentdock/conversation_url": "https://chatgpt.com/c/meta-url",
+	}
+	result := callSDKTool(t, session, meta, "agentdock_context", map[string]any{
+		"action":           "bootstrap",
+		"conversation_url": "https://chatgpt.com/c/args-url",
+	})
+	if !result.IsError {
+		t.Fatalf("disagreement must fail: %#v", result)
+	}
+	// 冲突失败后不得留下任何绑定。
+	current := callSDKTool(t, session, mcpsdk.Meta{"openai/session": "openai-session-bootstrap-conflict-1"}, "mcp_session_current", nil)
+	if current.IsError {
+		t.Fatalf("mcp_session_current = %#v", current)
+	}
+	sessionInfo := current.StructuredContent.(map[string]any)["session"].(map[string]any)
+	if sessionInfo["conversation_url"] != "" {
+		t.Fatalf("disagreement left a binding: %#v", sessionInfo)
+	}
+}
+
+func TestSDKConcurrentCallerIsolation(t *testing.T) {
+	_, server := newSDKTestServer(t)
+	const callers = 6
+	start := make(chan struct{})
+	errs := make(chan error, callers)
+	for i := 0; i < callers; i++ {
+		go func(n int) {
+			<-start
+			session := connectSDKClient(t, server)
+			rawSession := fmt.Sprintf("openai-session-concurrent-%d", n)
+			meta := mcpsdk.Meta{
+				"openai/session":             rawSession,
+				"agentdock/conversation_url": fmt.Sprintf("https://chatgpt.com/c/concurrent-%d?q=%d", n, n),
+			}
+			if result := callSDKTool(t, session, meta, "server_info", nil); result.IsError {
+				errs <- fmt.Errorf("server_info: %#v", result)
+				return
+			}
+			current := callSDKTool(t, session, mcpsdk.Meta{"openai/session": rawSession}, "mcp_session_current", nil)
+			info := current.StructuredContent.(map[string]any)["session"].(map[string]any)
+			want := fmt.Sprintf("https://chatgpt.com/c/concurrent-%d", n)
+			if got, _ := info["conversation_url"].(string); got != want {
+				errs <- fmt.Errorf("caller %d bound to %q, want %q", n, got, want)
+				return
+			}
+			errs <- nil
+		}(i)
+	}
+	close(start)
+	for i := 0; i < callers; i++ {
+		if err := <-errs; err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+func TestSDKContextSpoofingRejected(t *testing.T) {
+	_, server := newSDKTestServer(t)
+	session := connectSDKClient(t, server)
+
+	// 会话身份只能来自协议元数据：作为普通参数伪造必须被拒绝。
+	for name, args := range map[string]map[string]any{
+		"mcp_session_current": {"session_id": "forged-session", "openai/session": "forged"},
+		"mcp_session_control": {"action": "status", "session_id": "forged-session"},
+		"mcp_session_bind": {
+			"conversation_url": "https://chatgpt.com/c/forged", "session_id": "forged-session",
+		},
+	} {
+		result := callSDKTool(t, session, nil, name, args)
+		if !result.IsError {
+			t.Fatalf("%s with forged identity args unexpectedly succeeded: %#v", name, result)
+		}
+		structured, _ := result.StructuredContent.(map[string]any)
+		if code, _ := structured["code"].(string); code != "INVALID_ARGUMENT" {
+			t.Fatalf("%s forged args error code = %q, want INVALID_ARGUMENT", name, code)
+		}
+	}
+}
+
+func TestOfficialSDKPropagatesOpenAISessionMetaAndBinding(t *testing.T) {
+	root := t.TempDir()
+	cfg := config.Config{AgentDockDefaultDir: root, AgentDockHome: filepath.Join(root, ".agentdock")}
+	if err := cfg.Normalize(); err != nil {
+		t.Fatalf("Normalize() error = %v", err)
+	}
+	runtime, err := app.NewRuntime(cfg)
+	if err != nil {
+		t.Fatalf("NewRuntime() error = %v", err)
+	}
+	defer runtime.Close()
+
+	serverTransport, clientTransport := mcpsdk.NewInMemoryTransports()
+	server := NewServer(runtime, cfg)
+	serverDone := make(chan error, 1)
+	go func() { serverDone <- server.sdk.Run(t.Context(), serverTransport) }()
+
+	client := mcpsdk.NewClient(
+		&mcpsdk.Implementation{Name: "chatgpt-session-test", Version: "1.0.0"},
+		&mcpsdk.ClientOptions{Capabilities: &mcpsdk.ClientCapabilities{}},
+	)
+	session, err := client.Connect(t.Context(), clientTransport, nil)
+	if err != nil {
+		t.Fatalf("Connect() error = %v", err)
+	}
+
+	const rawSession = "openai-session-e2e-secret-123"
+	meta := mcpsdk.Meta{"openai/session": rawSession}
+	if _, err := session.CallTool(t.Context(), &mcpsdk.CallToolParams{
+		Meta:      meta,
+		Name:      "mcp_session_bind",
+		Arguments: map[string]any{"conversation_url": "https://chatgpt.com/c/e2e-1", "conversation_title": "E2E", "watchdog_task_id": "wd-e2e"},
+	}); err != nil {
+		t.Fatalf("mcp_session_bind error = %v", err)
+	}
+
+	current, err := session.CallTool(t.Context(), &mcpsdk.CallToolParams{
+		Meta: meta,
+		Name: "mcp_session_current",
+	})
+	if err != nil {
+		t.Fatalf("mcp_session_current error = %v", err)
+	}
+	if current.IsError {
+		t.Fatalf("mcp_session_current result = %#v", current)
+	}
+	structured, ok := current.StructuredContent.(map[string]any)
+	if !ok {
+		t.Fatalf("StructuredContent = %#v", current.StructuredContent)
+	}
+	sessionInfo, ok := structured["session"].(map[string]any)
+	if !ok {
+		t.Fatalf("session = %#v", structured["session"])
+	}
+	if sessionInfo["conversation_url"] != "https://chatgpt.com/c/e2e-1" || sessionInfo["watchdog_task_id"] != "wd-e2e" {
+		t.Fatalf("session binding = %#v", sessionInfo)
+	}
+	encoded, _ := json.Marshal(structured)
+	if strings.Contains(string(encoded), rawSession) {
+		t.Fatalf("public MCP response leaked raw session identity: %s", encoded)
+	}
+
+	statePath := filepath.Join(cfg.AgentDockHome, "mcp-client-sessions.json")
+	stateBytes, err := os.ReadFile(statePath)
+	if err != nil {
+		t.Fatalf("read MCP session state: %v", err)
+	}
+	if strings.Contains(string(stateBytes), rawSession) {
+		t.Fatalf("persisted MCP session state leaked raw session identity: %s", stateBytes)
+	}
+	var state map[string]any
+	if err := json.Unmarshal(stateBytes, &state); err != nil {
+		t.Fatalf("decode MCP session state: %v", err)
+	}
+	sessions, _ := state["sessions"].([]any)
+	if len(sessions) != 1 {
+		t.Fatalf("persisted sessions = %#v", sessions)
+	}
+	persisted, _ := sessions[0].(map[string]any)
+	if active, _ := persisted["active_calls"].(float64); active != 0 {
+		t.Fatalf("active_calls after completed tool = %#v", persisted["active_calls"])
+	}
+
+	if err := session.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+	if err := <-serverDone; err != nil {
+		t.Fatalf("Server.Run() error = %v", err)
 	}
 }
 

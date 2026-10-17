@@ -42,10 +42,7 @@ func TestValidateAgentStartCredentialOpenCodeSkipsStoreLookup(t *testing.T) {
 }
 
 func TestValidateAgentStartCredentialLegacyRequiresStoredBinding(t *testing.T) {
-	store, err := credential.NewStore(t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
+	store := newTestCredentialStore()
 	ctx := context.Background()
 	if err := validateAgentStartCredential(ctx, store, routeAgentBackend("anthropic"), "anthropic", "cred_missing_legacy"); !errors.Is(err, credential.ErrNotFound) {
 		t.Fatalf("missing legacy credential error=%v want ErrNotFound", err)
@@ -53,10 +50,7 @@ func TestValidateAgentStartCredentialLegacyRequiresStoredBinding(t *testing.T) {
 }
 
 func TestValidateAgentStartCredentialLegacyRejectsProviderMismatch(t *testing.T) {
-	store, err := credential.NewStore(t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
+	store := newTestCredentialStore()
 	ctx := context.Background()
 	if _, err := store.Put(ctx, "cred_c25_provider_bound", "anthropic", []byte("C25_TEST_SECRET_provider_binding")); err != nil {
 		t.Fatal(err)

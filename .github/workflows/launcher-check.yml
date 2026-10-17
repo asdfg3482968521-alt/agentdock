@@ -1,0 +1,37 @@
+name: Windows Launcher Validation
+on:
+  push:
+    branches:
+      - main
+      - production-current-agentdock
+      - integration/**
+    paths:
+      - 'scripts/windows/**'
+      - 'Start-AgentDock.cmd'
+      - '.github/workflows/launcher-check.yml'
+  pull_request:
+    paths:
+      - 'scripts/windows/**'
+      - 'Start-AgentDock.cmd'
+      - '.github/workflows/launcher-check.yml'
+
+jobs:
+  powershell-syntax:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Parse launcher and runtime PowerShell
+        shell: pwsh
+        run: |
+          $failed = $false
+          Get-ChildItem scripts/windows -Filter 'AgentDock.*.ps1' | ForEach-Object {
+            $tokens = $null
+            $errors = $null
+            [void][System.Management.Automation.Language.Parser]::ParseFile($_.FullName, [ref]$tokens, [ref]$errors)
+            if ($errors.Count) {
+              $failed = $true
+              $errors | ForEach-Object { Write-Error $_.Message }
+            }
+          }
+          if ($failed) { exit 1 }
+          Write-Host "PowerShell syntax OK"

@@ -1,3 +1,13 @@
+# 私有 AgentDock（整合版）
+
+> **注意：本仓库不是 uvwt/agentdock 上游发行仓库。** 最新私有源码为 v0.7.9 功能整合分支，包含 2026-10-04 的 MCP 会话/Watchdog 及 DeepSeek Flash 子 Agent 路由；之前的 v0.7.7 二进制是旧的预发布构建。
+>
+> **Windows 一键使用：** 下载本仓库 Actions 的 Personal Windows Launcher Build 构建工件，解压后双击 **Start-AgentDock.cmd**。在可视化面板中粘贴 ngrok Authtoken、配置 OpenCode/Watchdog、开启 Windows 登录自动任务。参见 [私有版一键配置说明](docs/windows-one-click.md)。
+>
+> 下方遗留的“uvwt/agentdock 官方下载链接”“Docker 镜像”和“agentdock update”均指向**上游**，不是你的私有版。请不要用那些入口覆盖私有构建。
+
+---
+
 <div align="center">
 
 [English](./README.md) | 简体中文

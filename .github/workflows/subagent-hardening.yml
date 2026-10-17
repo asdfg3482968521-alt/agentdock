@@ -1,0 +1,58 @@
+name: Subagent Hardening
+
+on:
+  push:
+    branches:
+      - 'hardening/**'
+  pull_request:
+    branches:
+      - production-current-agentdock
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    name: Verify subagents on ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os:
+          - ubuntu-latest
+          - macos-latest
+          - windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Core native subagent tests
+        run: go test ./internal/opencodeautonomous ./internal/opencodenative ./internal/nativebridge
+
+      - name: Durable native binding tests
+        run: go test ./internal/session -run TestNativeSessionBinding
+
+      - name: Native autonomous adapter tests
+        run: go test ./internal/app -run TestOpenCodeNativeAutonomousBackend
+
+      - name: Native model route tests
+        run: go test ./internal/app -run TestParseD3NativeModelRoute
+
+      - name: D3 supervisor tests
+        run: go test ./internal/app -run TestD3Supervisor
+
+      - name: Focused race
+        if: runner.os == 'Linux'
+        run: go test -race ./internal/opencodeautonomous ./internal/opencodenative ./internal/nativebridge
+
+      - name: Focused vet
+        run: go vet ./internal/opencodeautonomous ./internal/opencodenative ./internal/nativebridge ./internal/app ./internal/session
+
+      - name: Build AgentDock
+        run: go build ./cmd/agentdock

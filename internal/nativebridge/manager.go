@@ -63,6 +63,7 @@ func (m *Manager) Start(ctx context.Context, request StartRequest) (session.Nati
 	request.Workspace = strings.TrimSpace(request.Workspace)
 	request.Provider = strings.TrimSpace(request.Provider)
 	request.Model = strings.TrimSpace(request.Model)
+	request.Variant = strings.TrimSpace(request.Variant)
 	request.ExecutionMode = strings.TrimSpace(request.ExecutionMode)
 	if request.AgentDockSessionID == "" || request.ClientRequestID == "" {
 		return session.NativeSessionBinding{}, &Error{Code: ErrorInvalid, Message: "agentdock_session_id and client_request_id are required"}
@@ -126,6 +127,7 @@ func (m *Manager) Start(ctx context.Context, request StartRequest) (session.Nati
 		}{
 			{name: "provider", current: &request.Provider, native: metadataString(nativeInfo.Metadata, metadataProvider)},
 			{name: "model", current: &request.Model, native: metadataString(nativeInfo.Metadata, metadataModel)},
+			{name: "variant", current: &request.Variant, native: metadataString(nativeInfo.Metadata, metadataVariant)},
 			{name: "execution_mode", current: &request.ExecutionMode, native: metadataString(nativeInfo.Metadata, metadataExecutionMode)},
 		} {
 			if *pair.current != "" && pair.native != "" && *pair.current != pair.native {
@@ -150,6 +152,7 @@ func (m *Manager) Start(ctx context.Context, request StartRequest) (session.Nati
 			metadataPermissionMode:   record.PermissionMode,
 			metadataProvider:         request.Provider,
 			metadataModel:            request.Model,
+			metadataVariant:          request.Variant,
 			metadataExecutionMode:    request.ExecutionMode,
 			metadataNativeRuntimeSHA: m.runtimeSHA,
 		}
@@ -169,7 +172,7 @@ func (m *Manager) Start(ctx context.Context, request StartRequest) (session.Nati
 	binding := session.NativeSessionBinding{
 		SubagentID: request.SubagentID, AgentDockSessionID: record.SessionID, ClientRequestID: request.ClientRequestID,
 		OpenCodeSessionID: nativeInfo.ID, Workspace: record.Workspace(), RuntimeScope: runtimeScope(record.SessionID),
-		PermissionMode: record.PermissionMode, Provider: request.Provider, Model: request.Model,
+		PermissionMode: record.PermissionMode, Provider: request.Provider, Model: request.Model, Variant: request.Variant,
 		ExecutionMode: request.ExecutionMode, State: session.NativeConversationActive, ExecutionState: session.NativeExecutionIdle,
 		LastEventCursor: 0, CreatedAt: now, LastActivity: now, TerminalState: "", ResultRefs: []session.NativeResultRef{},
 		NativeRuntimeSHA: m.runtimeSHA, NativeServerIdentity: m.serverIdentity,
@@ -438,6 +441,7 @@ func nativeMetadataMatchesBinding(metadata map[string]any, binding session.Nativ
 		metadataString(metadata, metadataPermissionMode) == binding.PermissionMode &&
 		metadataString(metadata, metadataProvider) == binding.Provider &&
 		metadataString(metadata, metadataModel) == binding.Model &&
+		metadataString(metadata, metadataVariant) == binding.Variant &&
 		metadataString(metadata, metadataExecutionMode) == binding.ExecutionMode
 }
 

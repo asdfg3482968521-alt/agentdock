@@ -1,3 +1,11 @@
+# Personal AgentDock fork (unified source)
+
+> **This is not an upstream uvwt/agentdock release.** This fork integrates the October 2026 session/Watchdog and DeepSeek Flash changes. Use the repository's **Personal Windows Launcher Build** Actions artifact, unzip, and double-click **Start-AgentDock.cmd**. The visual configuration panel supports ngrok, OAuth, OpenCode options and a per-user Windows logon scheduled task. See [one-click Windows guide](docs/windows-one-click.md).
+>
+> Upstream installer, Docker, release and updater links further below belong to uvwt/agentdock, **not** this private fork. Do not use them to update the custom build.
+
+---
+
 <div align="center">
 
 English | [简体中文](./README.zh-CN.md)

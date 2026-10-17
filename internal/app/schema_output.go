@@ -16,6 +16,34 @@ func OutputSchema(name string) map[string]any {
 	objectProp := func(desc string) map[string]any {
 		return map[string]any{"type": "object", "description": desc, "additionalProperties": true}
 	}
+	mcpClientSessionProp := func() map[string]any {
+		return map[string]any{
+			"type": "object", "additionalProperties": false,
+			"required": []string{"session_key", "session_id_masked", "client_name", "client_version", "protocol_version", "first_seen_at", "last_seen_at", "last_tool", "last_request_id", "tool_calls", "active_calls", "last_started_at", "last_finished_at", "last_duration_ms", "last_ok", "conversation_url", "conversation_title", "watchdog_task_id", "bound_at"},
+			"properties": map[string]any{
+				"session_key":       stringProp("Stable non-secret fingerprint for this MCP client session."),
+				"session_id_masked": stringProp("Masked opaque client session id for operator display."),
+				"client_name":       stringProp("MCP client implementation name when reported."),
+				"client_version":    stringProp("MCP client implementation version when reported."),
+				"protocol_version":  stringProp("Negotiated MCP protocol version when reported."),
+				"first_seen_at":     stringProp("UTC first-seen timestamp."),
+				"last_seen_at":      stringProp("UTC last-seen timestamp."),
+				"last_tool":         stringProp("Most recently invoked AgentDock tool."),
+				"last_request_id":   stringProp("Most recent AgentDock request id for log correlation."),
+				"tool_calls":        intProp("Number of observed MCP tool calls in this session."),
+				"active_calls":      intProp("Number of currently in-flight MCP tool calls from this session."),
+				"last_started_at":   stringProp("UTC timestamp when the most recent MCP tool call started."),
+				"last_finished_at":  stringProp("UTC timestamp when the most recent MCP tool call finished."),
+				"last_duration_ms":  intProp("Duration in milliseconds of the most recently finished MCP tool call."),
+				"last_ok":           boolProp("Whether the most recently finished MCP tool call succeeded."),
+				"conversation_url":  stringProp("Bound ChatGPT conversation URL, when available."),
+
+				"conversation_title": stringProp("Bound ChatGPT conversation title, when available."),
+				"watchdog_task_id":   stringProp("Bound ChatGPT Watchdog task id, when available."),
+				"bound_at":           stringProp("UTC binding timestamp, when available."),
+			},
+		}
+	}
 	sessionProp := func() map[string]any {
 		return map[string]any{
 			"type": "object", "additionalProperties": false,
@@ -182,12 +210,36 @@ func OutputSchema(name string) map[string]any {
 		props["opencode_manifest"] = stringProp("Configured verified OpenCode runtime manifest path.")
 		props["opencode_runtimes"] = arrayProp("Current workspace-bound OpenCode runtime summaries.")
 		props["opencode_tools"] = map[string]any{"type": "array", "items": map[string]any{"type": "string"}}
+		props["opencode_native_default_model"] = stringProp("Default native subagent route when model is omitted; explicit model selections are preserved.")
 		props["trusted_proxy_cidrs"] = map[string]any{"type": "array", "items": map[string]any{"type": "string"}}
 		props["auth_enabled"] = boolProp("Whether MCP authentication is required.")
 		props["endpoint_path"] = stringProp("HTTP path used by the MCP endpoint.")
+		props["mcp_session_awareness"] = boolProp("Whether protocol-owned MCP client session tracking is available.")
+		props["mcp_session_state_file"] = stringProp("Local JSON state file containing MCP client session activity and bindings.")
+		props["mcp_call_log_file"] = stringProp("Compact one-line MCP call activity log.")
+		props["session_bootstrap_actions"] = map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "Actions accepted by agentdock_context for session bootstrap and Watchdog control."}
+		props["mcp_session_control_actions"] = map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "Actions accepted by mcp_session_control."}
+		props["watchdog_dashboard_url"] = stringProp("Configured loopback-only ChatGPT Watchdog dashboard URL.")
+		props["watchdog_dashboard_enabled"] = boolProp("Whether the Watchdog dashboard client is available.")
 	case "agentdock_context":
+		// 缓存客户端依赖 context 字段存在：每个成功动作都返回 context
+		// （bootstrap 为渲染全文，其余动作为空串），同时附加会话/watchdog。
 		required = []string{"context"}
-		props["context"] = stringProp("Rendered AgentDock bootstrap context text for clients that cannot inject system prompt context.")
+		props["context"] = stringProp("AgentDock context text returned by action=bootstrap; present but empty for status/bind/control actions.")
+		props["action"] = stringProp("Session bootstrap action applied: bootstrap, status, or bind; control actions are reported through the watchdog field.")
+		props["session"] = mcpClientSessionProp()
+		props["state_file"] = stringProp("Local MCP client session state file path.")
+		props["watchdog"] = objectProp("Watchdog dashboard task state and control result, present for status and control actions.")
+	case "mcp_session_current", "mcp_session_bind":
+		props["session"] = mcpClientSessionProp()
+		props["state_file"] = stringProp("Local MCP client session state file path.")
+		required = []string{"session", "state_file"}
+	case "mcp_session_control":
+		props["action"] = stringProp("Completed Watchdog control action.")
+		props["session"] = mcpClientSessionProp()
+		props["state_file"] = stringProp("Local MCP client session state file path.")
+		props["watchdog"] = objectProp("Structured Watchdog result: task_id, conversation_url, task_state_before/after, desired_state, accepted, effective, and a note when pending. effective is true only when the dashboard reported the desired task state after the request.")
+		required = []string{"action", "session", "state_file"}
 	case "read_file":
 		props["path"] = stringProp("Host path or skill:// resource URI. Relative Host paths resolve from ~/AgentDock.")
 		props["content"] = stringProp("Text content slice.")
@@ -511,7 +563,7 @@ func OutputSchema(name string) map[string]any {
 	}
 	additional := true
 	switch name {
-	case "session_open", "session_status", "session_list", "session_close", "agent_supervisor_message", "agent_supervisor_observe", "agent_supervisor_correct":
+	case "session_open", "session_status", "session_list", "session_close", "agent_supervisor_message", "agent_supervisor_observe", "agent_supervisor_correct", "mcp_session_current", "mcp_session_bind", "mcp_session_control":
 		additional = false
 	}
 	return map[string]any{"type": "object", "properties": props, "required": required, "additionalProperties": additional}

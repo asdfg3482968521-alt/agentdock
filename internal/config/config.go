@@ -27,6 +27,10 @@ const (
 
 	defaultOAuthAccessTokenTTLSeconds = int64(time.Hour / time.Second)
 	maxOAuthAccessTokenTTLSeconds     = int64(999999 * 24 * 60 * 60)
+
+	// DefaultWatchdogDashboardURL is the loopback-only ChatGPT Watchdog
+	// dashboard endpoint used when AGENTDOCK_WATCHDOG_DASHBOARD_URL is unset.
+	DefaultWatchdogDashboardURL = "http://127.0.0.1:8770/"
 )
 
 type Config struct {
@@ -73,6 +77,7 @@ type Config struct {
 	TrustedProxyCIDRs                 []string
 	InstructionsFile                  string
 	Instructions                      string
+	WatchdogDashboardURL              string
 }
 
 func FromEnv() (Config, error) {
@@ -217,6 +222,7 @@ func FromEnv() (Config, error) {
 		Stdio:                             stdio,
 		TrustedProxyCIDRs:                 splitCommaSeparated(os.Getenv("AGENTDOCK_TRUSTED_PROXY_CIDRS")),
 		InstructionsFile:                  strings.TrimSpace(os.Getenv("AGENTDOCK_INSTRUCTIONS_FILE")),
+		WatchdogDashboardURL:              getenv("AGENTDOCK_WATCHDOG_DASHBOARD_URL", DefaultWatchdogDashboardURL),
 	}, nil
 }
 
@@ -379,7 +385,7 @@ func (c *Config) Normalize() error {
 			return fmt.Errorf("InstructionsFile must be a regular file: %s", c.InstructionsFile)
 		}
 		if info.Size() > maxInstructionsFileBytes {
-			return fmt.Errorf("InstructionsFile %s exceeds %d bytes", c.InstructionsFile)
+			return fmt.Errorf("InstructionsFile %s exceeds %d bytes", c.InstructionsFile, maxInstructionsFileBytes)
 		}
 
 		file, err := os.Open(c.InstructionsFile)
@@ -394,7 +400,7 @@ func (c *Config) Normalize() error {
 			return fmt.Errorf("read InstructionsFile %s: %w", c.InstructionsFile, err)
 		}
 		if len(data) > maxInstructionsFileBytes {
-			return fmt.Errorf("InstructionsFile %s exceeds %d bytes", c.InstructionsFile)
+			return fmt.Errorf("InstructionsFile %s exceeds %d bytes", c.InstructionsFile, maxInstructionsFileBytes)
 		}
 		if !utf8.Valid(data) {
 			return fmt.Errorf("InstructionsFile must contain valid UTF-8: %s", c.InstructionsFile)
@@ -404,6 +410,33 @@ func (c *Config) Normalize() error {
 			return fmt.Errorf("InstructionsFile must contain non-empty instructions: %s", c.InstructionsFile)
 		}
 	}
+	c.WatchdogDashboardURL = strings.TrimSpace(c.WatchdogDashboardURL)
+	if c.WatchdogDashboardURL == "" {
+		c.WatchdogDashboardURL = DefaultWatchdogDashboardURL
+	}
+	parsedWatchdogURL, err := url.Parse(c.WatchdogDashboardURL)
+	if err != nil || parsedWatchdogURL.Scheme == "" || parsedWatchdogURL.Host == "" {
+		// 不回显原始值，避免含凭据的误配 URL 泄漏到日志。
+		return errors.New("AGENTDOCK_WATCHDOG_DASHBOARD_URL must be an absolute HTTP(S) URL")
+	}
+	if parsedWatchdogURL.User != nil || parsedWatchdogURL.RawQuery != "" || parsedWatchdogURL.Fragment != "" {
+		return errors.New("AGENTDOCK_WATCHDOG_DASHBOARD_URL must not contain user info, a query, or a fragment")
+	}
+	switch strings.ToLower(parsedWatchdogURL.Scheme) {
+	case "http", "https":
+	default:
+		return errors.New("AGENTDOCK_WATCHDOG_DASHBOARD_URL must use http or https")
+	}
+	// The Watchdog client is loopback-only: the dashboard must live on the
+	// local host even when https is used.
+	watchdogHostname := strings.ToLower(parsedWatchdogURL.Hostname())
+	if watchdogHostname != "localhost" {
+		ip := net.ParseIP(watchdogHostname)
+		if ip == nil || !ip.IsLoopback() {
+			return errors.New("AGENTDOCK_WATCHDOG_DASHBOARD_URL must be a loopback URL")
+		}
+	}
+	c.WatchdogDashboardURL = strings.TrimRight(c.WatchdogDashboardURL, "/") + "/"
 	if err := c.normalizeACP(); err != nil {
 		return err
 	}

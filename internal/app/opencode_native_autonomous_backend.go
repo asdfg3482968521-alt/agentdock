@@ -13,7 +13,7 @@ import (
 
 const (
 	d3NativeAutonomousProvider     = "opencode-native"
-	d3NativeAutonomousDefaultModel = "mimo-v2.5-free"
+	d3NativeAutonomousDefaultModel = "jiyuan/deepseek-flash#max"
 )
 
 type d3NativeAutonomousRunner interface {
@@ -34,12 +34,54 @@ func (b *openCodeNativeAutonomousAgentBackend) BackendIdentity() agentruntime.Ba
 
 func (b *openCodeNativeAutonomousAgentBackend) RequiresCredential() bool { return false }
 
-func (b *openCodeNativeAutonomousAgentBackend) ResolveModel(raw string) (string, error) {
-	model := strings.TrimSpace(raw)
-	if model == "" || model == "default" {
-		return d3NativeAutonomousDefaultModel, nil
+type d3NativeModelRoute struct {
+	Provider string
+	Model    string
+	Variant  string
+}
+
+func parseD3NativeModelRoute(raw string) (d3NativeModelRoute, error) {
+	value := strings.TrimSpace(raw)
+	if value == "" || value == "default" {
+		value = d3NativeAutonomousDefaultModel
 	}
-	return model, nil
+	route := d3NativeModelRoute{Provider: "opencode"}
+	if before, after, ok := strings.Cut(value, "#"); ok {
+		value = strings.TrimSpace(before)
+		route.Variant = strings.TrimSpace(after)
+		if route.Variant == "" {
+			return d3NativeModelRoute{}, fmt.Errorf("native model variant is empty")
+		}
+	}
+	if provider, model, ok := strings.Cut(value, "/"); ok {
+		route.Provider = strings.TrimSpace(provider)
+		route.Model = strings.TrimSpace(model)
+	} else {
+		route.Model = strings.TrimSpace(value)
+	}
+	if route.Provider == "" || route.Model == "" {
+		return d3NativeModelRoute{}, fmt.Errorf("native model must be model or provider/model with optional #variant")
+	}
+	return route, nil
+}
+
+func canonicalD3NativeModel(route d3NativeModelRoute) string {
+	value := route.Model
+	if route.Provider != "opencode" {
+		value = route.Provider + "/" + value
+	}
+	if route.Variant != "" {
+		value += "#" + route.Variant
+	}
+	return value
+}
+
+func (b *openCodeNativeAutonomousAgentBackend) ResolveModel(raw string) (string, error) {
+	route, err := parseD3NativeModelRoute(raw)
+	if err != nil {
+		return "", err
+	}
+	return canonicalD3NativeModel(route), nil
 }
 
 func (b *openCodeNativeAutonomousAgentBackend) Run(ctx context.Context, request agentruntime.BackendRequest, emit func(agentruntime.BackendEvent) error) (agentruntime.BackendResult, error) {
@@ -54,13 +96,22 @@ func (b *openCodeNativeAutonomousAgentBackend) Run(ctx context.Context, request 
 		}
 	}
 
+	route, routeErr := parseD3NativeModelRoute(request.Model)
+	if routeErr != nil {
+		return agentruntime.BackendResult{}, &agentruntime.BackendError{
+			Code: agentruntime.BackendErrorModelUnavailable,
+			Err:  routeErr,
+		}
+	}
+
 	result, err := b.runner.Run(ctx, opencodeautonomous.Request{
 		AgentID:            request.AgentID,
 		AgentDockSessionID: request.SessionID,
 		Workspace:          request.Workspace,
 		PermissionMode:     request.PermissionMode,
-		Provider:           "opencode",
-		Model:              request.Model,
+		Provider:           route.Provider,
+		Model:              route.Model,
+		Variant:            route.Variant,
 		Task:               request.Prompt,
 		Timeout:            request.Timeout,
 	}, func(event opencodeautonomous.TelemetryEvent) error {
@@ -102,9 +153,14 @@ func (b *openCodeNativeAutonomousAgentBackend) Run(ctx context.Context, request 
 			Err:  errors.New("native autonomous backend returned empty root OpenCode session id"),
 		}
 	}
-	resolvedModel := strings.TrimSpace(result.Model)
+	resolvedModel := strings.TrimSpace(request.Model)
 	if resolvedModel == "" {
-		resolvedModel = strings.TrimSpace(request.Model)
+		resolvedModel = canonicalD3NativeModel(d3NativeModelRoute{Provider: result.Provider, Model: result.Model, Variant: result.Variant})
+	}
+	if emit != nil && strings.TrimSpace(result.FinalText) != "" {
+		if err := emit(agentruntime.BackendEvent{Kind: agentruntime.ProviderEventText, Text: result.FinalText}); err != nil {
+			return agentruntime.BackendResult{}, err
+		}
 	}
 	return agentruntime.BackendResult{
 		Summary:       result.FinalText,

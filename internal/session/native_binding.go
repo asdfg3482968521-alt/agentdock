@@ -53,6 +53,7 @@ type NativeSessionBinding struct {
 	PermissionMode             string                     `json:"permission_mode"`
 	Provider                   string                     `json:"provider"`
 	Model                      string                     `json:"model"`
+	Variant                    string                     `json:"variant,omitempty"`
 	ExecutionMode              string                     `json:"execution_mode"`
 	State                      NativeConversationState    `json:"state"`
 	ExecutionState             NativeExecutionState       `json:"execution_state"`
@@ -112,6 +113,7 @@ func normalizeNativeBinding(record Record, binding NativeSessionBinding, now tim
 	binding.PermissionMode = strings.TrimSpace(binding.PermissionMode)
 	binding.Provider = strings.TrimSpace(binding.Provider)
 	binding.Model = strings.TrimSpace(binding.Model)
+	binding.Variant = strings.TrimSpace(binding.Variant)
 	binding.ExecutionMode = strings.TrimSpace(binding.ExecutionMode)
 	binding.NativeRuntimeSHA = strings.TrimSpace(binding.NativeRuntimeSHA)
 	binding.NativeServerIdentity = strings.TrimSpace(binding.NativeServerIdentity)

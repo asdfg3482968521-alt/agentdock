@@ -168,20 +168,59 @@ func (s *Server) callTool(ctx context.Context, name string, request *mcpsdk.Call
 	started := time.Now()
 	requestID := fmt.Sprintf("%s-%d", s.instanceID, s.requestSeq.Add(1))
 	plane := toolRequestPlane(name)
+	clientContext := mcpClientContextFromRequest(request)
+	sessionKey := ""
+	callOK := false
+	if clientContext.SessionID != "" {
+		ctx = app.WithMCPClientContext(ctx, clientContext)
+		if s != nil && s.runtime != nil {
+			recorded, recordErr := s.runtime.RecordMCPClientCall(clientContext, name, requestID)
+			if recordErr != nil {
+				slog.Warn("MCP client session activity persistence failed", "request_id", requestID, "server_instance", s.instanceID, "tool", name, "error", recordErr)
+			}
+			if key, ok := recorded["session_key"].(string); ok {
+				sessionKey = key
+			}
+			defer func() {
+				if _, finishErr := s.runtime.FinishMCPClientCall(clientContext, time.Since(started), callOK); finishErr != nil {
+					slog.Warn("MCP client session completion persistence failed", "request_id", requestID, "server_instance", s.instanceID, "tool", name, "error", finishErr)
+				}
+			}()
+		}
+	}
 	arguments := map[string]any{}
 	if request != nil && request.Params != nil && len(request.Params.Arguments) > 0 && string(request.Params.Arguments) != "null" {
 		if err := json.Unmarshal(request.Params.Arguments, &arguments); err != nil {
-			slog.Warn("tool params invalid", "request_id", requestID, "server_instance", s.instanceID, "tool", name, "plane", plane, "duration_ms", time.Since(started).Milliseconds())
+			attrs := []any{"tool", name}
+			if sessionKey != "" {
+				attrs = append(attrs, "session", sessionKey)
+			}
+			slog.Warn("MCP invalid params", attrs...)
 			return nil, &sdkjsonrpc.Error{Code: sdkjsonrpc.CodeInvalidParams, Message: "tool arguments must be a JSON object"}
 		}
 	}
-	slog.Info("tool started", "request_id", requestID, "server_instance", s.instanceID, "tool", name, "plane", plane)
-	result, err := s.invokeTool(ctx, name, arguments, requestID, plane)
-	finishedAttrs := []any{"request_id", requestID, "server_instance", s.instanceID, "tool", name, "plane", plane, "duration_ms", time.Since(started).Milliseconds(), "ok", err == nil}
-	if err != nil {
-		finishedAttrs = append(finishedAttrs, "error", err)
+	var result app.Result
+	var err error
+	// 首次调用自动绑定：协议元数据携带有效 conversation_url 时，
+	// 在同一调用内确定性绑定；与既有绑定冲突时在任何业务副作用前拒绝。
+	// 显式绑定工具（mcp_session_bind / agentdock_context）自行处理绑定。
+	if clientContext.SessionID != "" && s != nil && s.runtime != nil && name != "mcp_session_bind" && name != "agentdock_context" {
+		if bindErr := s.runtime.AutoBindMCPClientSession(clientContext); bindErr != nil {
+			err = bindErr
+		}
 	}
-	slog.Info("tool finished", finishedAttrs...)
+	if err == nil {
+		result, err = s.invokeTool(ctx, name, arguments, requestID, plane)
+	}
+	callOK = err == nil
+	finishedAttrs := []any{"tool", name, "ok", err == nil, "ms", time.Since(started).Milliseconds()}
+	if sessionKey != "" {
+		finishedAttrs = append(finishedAttrs, "session", sessionKey)
+	}
+	if err != nil {
+		finishedAttrs = append(finishedAttrs, "request", requestID, "error", err)
+	}
+	slog.Info("MCP tool", finishedAttrs...)
 
 	encoded, encodeErr := json.Marshal(toolEnvelope(name, result, err))
 	if encodeErr != nil {
@@ -192,6 +231,42 @@ func (s *Server) callTool(ctx context.Context, name string, request *mcpsdk.Call
 		return nil, fmt.Errorf("decode MCP tool result: %w", decodeErr)
 	}
 	return &response, nil
+}
+
+func mcpClientContextFromRequest(request *mcpsdk.CallToolRequest) app.MCPClientContext {
+	if request == nil || request.Params == nil {
+		return app.MCPClientContext{}
+	}
+	sessionID := ""
+	conversationURL := ""
+	conversationTitle := ""
+	watchdogTaskID := ""
+	if request.Params.Meta != nil {
+		if value, ok := request.Params.Meta["openai/session"].(string); ok {
+			sessionID = strings.TrimSpace(value)
+		}
+		if value, ok := request.Params.Meta["agentdock/conversation_url"].(string); ok {
+			conversationURL = strings.TrimSpace(value)
+		}
+		if value, ok := request.Params.Meta["agentdock/conversation_title"].(string); ok {
+			conversationTitle = strings.TrimSpace(value)
+		}
+		if value, ok := request.Params.Meta["agentdock/watchdog_task_id"].(string); ok {
+			watchdogTaskID = strings.TrimSpace(value)
+		}
+	}
+	info := app.MCPClientContext{
+		SessionID:         sessionID,
+		ProtocolVersion:   strings.TrimSpace(request.ProtocolVersion()),
+		ConversationURL:   conversationURL,
+		ConversationTitle: conversationTitle,
+		WatchdogTaskID:    watchdogTaskID,
+	}
+	if client := request.ClientInfo(); client != nil {
+		info.ClientName = strings.TrimSpace(client.Name)
+		info.ClientVersion = strings.TrimSpace(client.Version)
+	}
+	return info
 }
 
 func (s *Server) invokeTool(ctx context.Context, name string, arguments map[string]any, requestID, plane string) (result app.Result, err error) {
@@ -215,7 +290,7 @@ func (s *Server) invokeTool(ctx context.Context, name string, arguments map[stri
 
 func toolRequestPlane(name string) string {
 	switch name {
-	case "server_info", "agentdock_context", "mcp_manage", "mcp_tool_search", "mcp_tool_inspect":
+	case "server_info", "agentdock_context", "mcp_session_current", "mcp_session_bind", "mcp_session_control", "mcp_manage", "mcp_tool_search", "mcp_tool_inspect":
 		return "CONTROL_PLANE"
 	default:
 		return "EXECUTION_PLANE"

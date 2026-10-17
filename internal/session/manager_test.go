@@ -20,6 +20,15 @@ func (g *fakeGit) DetectRepository(_ context.Context, path string) (string, bool
 	if root, ok := g.repos[cleanKey(path)]; ok {
 		return root, true, nil
 	}
+	canonicalPath, pathErr := filepath.EvalSymlinks(path)
+	if pathErr == nil {
+		for _, root := range g.repos {
+			canonicalRoot, rootErr := filepath.EvalSymlinks(root)
+			if rootErr == nil && cleanKey(canonicalRoot) == cleanKey(canonicalPath) {
+				return canonicalRoot, true, nil
+			}
+		}
+	}
 	return path, false, nil
 }
 
@@ -108,7 +117,7 @@ func TestOpenGitSessionsCreatesUniqueManagedWorktrees(t *testing.T) {
 	if a.SessionID == b.SessionID || a.Branch == nil || b.Branch == nil || *a.Branch == *b.Branch || a.Worktree == nil || b.Worktree == nil || cleanKey(*a.Worktree) == cleanKey(*b.Worktree) {
 		t.Fatalf("git isolation not unique: A=%+v B=%+v", a, b)
 	}
-	managedRoot := filepath.Join(root, "worktrees")
+	managedRoot := manager.worktreeRoot
 	if !pathWithin(managedRoot, *a.Worktree) || !pathWithin(managedRoot, *b.Worktree) {
 		t.Fatalf("worktree escaped managed root: %q %q", *a.Worktree, *b.Worktree)
 	}

@@ -1,0 +1,83 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "model": "jiyuan/deepseek-flash",
+  "small_model": "jiyuan/deepseek-flash",
+  "enabled_providers": [
+    "jiyuan"
+  ],
+  "provider": {
+    "jiyuan": {
+      "name": "基元律动",
+      "npm": "@ai-sdk/openai-compatible",
+      "options": {
+        "baseURL": "https://tokenrhythm.studio/v1"
+      },
+      "models": {
+        "deepseek-flash": {
+          "name": "DeepSeek Flash",
+          "attachment": true,
+          "reasoning": true,
+          "tool_call": true,
+          "temperature": false,
+          "limit": {
+            "context": 1048576,
+            "output": 393216
+          },
+          "modalities": {
+            "input": [
+              "text",
+              "image"
+            ],
+            "output": [
+              "text"
+            ]
+          },
+          "interleaved": {
+            "field": "reasoning_content"
+          },
+          "options": {
+            "thinking": {
+              "type": "enabled"
+            },
+            "reasoningEffort": "max"
+          },
+          "variants": {
+            "low": {
+              "thinking": {
+                "type": "enabled"
+              },
+              "reasoningEffort": "low"
+            },
+            "high": {
+              "thinking": {
+                "type": "enabled"
+              },
+              "reasoningEffort": "high"
+            },
+            "max": {
+              "thinking": {
+                "type": "enabled"
+              },
+              "reasoningEffort": "max"
+            },
+            "none": {
+              "disabled": true
+            },
+            "minimal": {
+              "disabled": true
+            },
+            "medium": {
+              "disabled": true
+            },
+            "xhigh": {
+              "disabled": true
+            },
+            "off": {
+              "disabled": true
+            }
+          }
+        }
+      }
+    }
+  }
+}
