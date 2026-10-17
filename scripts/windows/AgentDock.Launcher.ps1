@@ -45,6 +45,10 @@ $cfg = @{
     reserved_url = ""
     home_path = (Join-Path $env:USERPROFILE ".agentdock")
     workspace_path = (Join-Path $env:USERPROFILE "AgentDock")
+    opencode_manifest = ""
+    native_url = ""
+    opencode_project_root = ""
+    watchdog_url = "http://127.0.0.1:8770/"
 }
 if (Test-Path $SettingsPath) {
     $saved = Get-Content $SettingsPath -Raw | ConvertFrom-Json
@@ -63,9 +67,10 @@ if (Test-Path $SecretsPath) {
 }
 $form = New-Object System.Windows.Forms.Form
 $form.Text = "AgentDock | 一键配置与运行面板"
-$form.Size = New-Object System.Drawing.Size(860,795)
+$form.Size = New-Object System.Drawing.Size(860,975)
+$form.AutoScroll = $true
 $form.StartPosition = "CenterScreen"
-$form.MinimumSize = New-Object System.Drawing.Size(850,770)
+$form.MinimumSize = New-Object System.Drawing.Size(850,720)
 $form.Font = New-Object System.Drawing.Font("Microsoft YaHei UI",9)
 $form.BackColor = [System.Drawing.Color]::FromArgb(247,249,252)
 
@@ -115,13 +120,17 @@ $port = Field "本地监听端口" 340 ([string]$cfg.port)
 $home = Field "AgentDock 数据目录" 380 ([string]$cfg.home_path)
 $workspace = Field "默认工作目录" 420 ([string]$cfg.workspace_path)
 
+$manifest = Field "OpenCode Manifest（可选）" 460 ([string]$cfg.opencode_manifest)
+$native = Field "OpenCode 原生 HTTP URL" 500 ([string]$cfg.native_url)
+$opencodeRoot = Field "OpenCode 项目根目录" 540 ([string]$cfg.opencode_project_root)
+$watchdog = Field "Watchdog 本地面板 URL" 580 ([string]$cfg.watchdog_url)
 $tip = New-Object System.Windows.Forms.Label
-$tip.Location = New-Object System.Drawing.Point(24,461)
+$tip.Location = New-Object System.Drawing.Point(24,623)
 $tip.Size = New-Object System.Drawing.Size(795,46)
 $tip.Text = "托管模式粘贴 Authtoken，并安装 ngrok v3。已有地址模式须先在外部启动 ngrok。公网使用 OAuth，临时 URL 变化后须重新配置 ChatGPT 连接。"
 $form.Controls.Add($tip)
 $auto = New-Object System.Windows.Forms.CheckBox
-$auto.Location = New-Object System.Drawing.Point(24,510)
+$auto.Location = New-Object System.Drawing.Point(24,677)
 $auto.Size = New-Object System.Drawing.Size(770,27)
 $auto.Text = "登录 Windows 时自动运行（当前用户计划任务，非 SYSTEM）"
 $auto.Checked = [bool](Get-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue)
@@ -134,18 +143,18 @@ function ActionButton([string]$Text,[int]$X,[int]$Y,[int]$Width) {
     $form.Controls.Add($btn)
     return $btn
 }
-$saveButton=ActionButton "保存配置" 24 549 145
-$startButton=ActionButton "启动" 180 549 112
-$stopButton=ActionButton "停止" 303 549 112
-$refreshButton=ActionButton "刷新状态" 426 549 117
-$copyUrl=ActionButton "复制 MCP 地址" 554 549 130
-$copyPassword=ActionButton "复制 OAuth 密码" 694 549 126
+$saveButton=ActionButton "保存配置" 24 720 145
+$startButton=ActionButton "启动" 180 720 112
+$stopButton=ActionButton "停止" 303 720 112
+$refreshButton=ActionButton "刷新状态" 426 720 117
+$copyUrl=ActionButton "复制 MCP 地址" 554 720 130
+$copyPassword=ActionButton "复制 OAuth 密码" 694 720 126
 $stateText = New-Object System.Windows.Forms.TextBox
 $stateText.Multiline = $true
 $stateText.ScrollBars = "Vertical"
 $stateText.ReadOnly = $true
-$stateText.Location = New-Object System.Drawing.Point(24,600)
-$stateText.Size = New-Object System.Drawing.Size(796,125)
+$stateText.Location = New-Object System.Drawing.Point(24,770)
+$stateText.Size = New-Object System.Drawing.Size(796,140)
 $form.Controls.Add($stateText)
 
 function Refresh-Status {
@@ -165,6 +174,9 @@ function Save-Settings {
     if ($mode.SelectedItem -eq "ngrok-existing" -and -not (Valid-Origin $url.Text.Trim())) { throw "请粘贴有效的 ngrok HTTPS Origin，不能带 /mcp。" }
     if ($reserved.Text.Trim() -and -not (Valid-Origin $reserved.Text.Trim())) { throw "保留域名必须是有效 HTTPS Origin。" }
     if (-not [IO.Path]::IsPathRooted($home.Text) -or -not [IO.Path]::IsPathRooted($workspace.Text)) { throw "数据目录和工作目录必须是绝对路径。" }
+    if ($manifest.Text.Trim() -and -not (Test-Path $manifest.Text.Trim() -PathType Leaf)) { throw "OpenCode runtime manifest 文件不存在。" }
+    if ($native.Text.Trim() -and $native.Text.Trim() -notmatch "^https?://") { throw "OpenCode URL 必须以 http(s):// 开头。" }
+    if ($watchdog.Text.Trim() -and $watchdog.Text.Trim() -notmatch "^https?://(localhost|127\.0\.0\.1|\[::1\])(?::\d+)?/?$") { throw "Watchdog URL 只允许本机地址。" }
     $config = [ordered]@{
         agentdock_path=[IO.Path]::GetFullPath($exe.Text.Trim())
         ngrok_path=$ngrok.Text.Trim()
@@ -174,6 +186,10 @@ function Save-Settings {
         port=$num
         home_path=[IO.Path]::GetFullPath($home.Text.Trim())
         workspace_path=[IO.Path]::GetFullPath($workspace.Text.Trim())
+        opencode_manifest=$manifest.Text.Trim()
+        native_url=$native.Text.Trim()
+        opencode_project_root=$opencodeRoot.Text.Trim()
+        watchdog_url=$watchdog.Text.Trim()
     }
     $secrets=@{}
     foreach ($name in @("bearer_token","oauth_password","oauth_signing_key","ngrok_authtoken")) {
@@ -186,7 +202,7 @@ function Save-Settings {
     if ($config.mode -eq "ngrok-managed" -and -not $secrets["ngrok_authtoken"]) { throw "托管 ngrok 模式请先粘贴 Authtoken。" }
     $secrets | ConvertTo-Json | Set-Content -LiteralPath $SecretsPath -Encoding UTF8
     $config | ConvertTo-Json | Set-Content -LiteralPath $SettingsPath -Encoding UTF8
-    $knownSecrets=$secrets
+    $script:knownSecrets=$secrets
     $token.Text = ""
     $user=[Security.Principal.WindowsIdentity]::GetCurrent().Name
     if ($auto.Checked) {
