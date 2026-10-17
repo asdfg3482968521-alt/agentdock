@@ -2,7 +2,7 @@
 
 AgentDock's `opencode-native` backend resolves an omitted or `default` model to `jiyuan/deepseek-flash#max`. Explicit `provider/model#variant` selections remain unchanged.
 
-Configure the connected OpenCode runtime with the companion [Flash configuration](examples/jiyuan-deepseek-flash.jsonc). The default and small model are both `jiyuan/deepseek-flash`; model options default to maximum reasoning. The configured input modalities are text and image, and the context limit is 1,048,576 tokens. These are configuration declarations; verify upstream availability and image behavior with a bounded request.
+Configure the connected OpenCode runtime with the companion [Flash configuration](examples/jiyuan-deepseek-flash.jsonc). The default and small model are both `jiyuan/deepseek-flash`; model options default to maximum reasoning. The supported reasoning variants are low, high, and max. The configured input modalities are text and image, and the context limit is 1,048,576 tokens. These are configuration declarations; verify upstream availability and image behavior with a bounded request.
 
 Keep only `deepseek-flash` in the normal Jiyuan model catalog. Do not alias another upstream model under this ID or automatically fall back to Pro, GLM or another provider.
 
