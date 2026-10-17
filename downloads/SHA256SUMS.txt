@@ -1,1 +1,1 @@
-0f10507fbb5ac0e8529dda2cf3ab7ec407f57d0a6511073d23e59ed549324b3f  AgentDock-OneClick-Windows.zip
+21d9f7d88862fc04a8c6f006bdd948629ce71dd27b1ef1c6f5e0d1bbec689a9c  AgentDock-OneClick-Windows.zip
