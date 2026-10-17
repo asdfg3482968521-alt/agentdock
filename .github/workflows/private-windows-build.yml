@@ -1,0 +1,48 @@
+name: Personal Windows Launcher Build
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+      - integration/latest-launcher-20261017
+    paths:
+      - 'cmd/**'
+      - 'internal/**'
+      - 'go.mod'
+      - 'go.sum'
+      - 'scripts/windows/**'
+      - 'Start-AgentDock.cmd'
+      - '.github/workflows/private-windows-build.yml'
+
+jobs:
+  windows-package:
+    runs-on: windows-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Run Go unit tests
+        shell: pwsh
+        run: go test ./...
+      - name: Build personal Windows package
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          New-Item -ItemType Directory -Force -Path dist/scripts/windows,dist/docs | Out-Null
+          $sha = (git rev-parse --short=12 HEAD).Trim()
+          $built = (Get-Date).ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ssZ")
+          $ldflags = "-X github.com/uvwt/agentdock/internal/buildinfo.Commit=$sha -X github.com/uvwt/agentdock/internal/buildinfo.BuildDate=$built"
+          go build -trimpath -ldflags "$ldflags" -o dist/agentdock.exe ./cmd/agentdock
+          Copy-Item Start-AgentDock.cmd dist/Start-AgentDock.cmd
+          Copy-Item scripts/windows/AgentDock.*.ps1 dist/scripts/windows/
+          Copy-Item docs/windows-one-click.md dist/docs/windows-one-click.md
+          Get-FileHash dist/agentdock.exe -Algorithm SHA256 | Select-Object Hash | ConvertTo-Json | Set-Content dist/agentdock.exe.sha256.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: agentdock-personal-windows
+          path: dist/
+          retention-days: 30
